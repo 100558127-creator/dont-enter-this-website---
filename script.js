@@ -1,2122 +1,3004 @@
-// Dream Garden Memorial - JavaScript
+/* ============================================== */
+/* === 游戏核心代码 (优化版) === */
+/* ============================================== */
 
-class DreamGardenMemorial {
-  constructor() {
-    this.currentUser = { id: `user_${Date.now()}`, username: 'Anonymous' };
-    this.memories = [];
-    this.draggedElement = null;
-    this.apiBaseUrl = 'http://localhost:3000/api';
-    this.activeTool = null;
-    this.candles = [];
-    this.flowers = [];
-    this.letters = [];
-    this.isDraggingItembar = false;
-    this.isCarving = false;
-    this.carvingCanvas = null;
-    this.carvingCtx = null;
-    this.carvingHistory = []; // 存储雕刻历史，用于撤销
-    this.tombstoneText = ''; // 存储墓碑文字
-    this.itembarDragOffset = { x: 0, y: 0 };
-    this.isDragging = false; // 简化的拖拽标志
-    this.dragJustEnded = false; // 拖拽刚结束标志
-    
-    this.init();
-  }
+// --- Game state ---
+const gameState = {
+  isPenActive: false,
+  isTapeActive: false,
+  isTweezersActive: false,
+  isMagnifierActive: false,
+  isBoxActive: false,
+  isPassActive: false,
+  mapRepaired: false,
+  letterRepaired: false,
+  passCollected: false,
+  gamePhase: 0,
+  archive: [],
+  amelieLetterDeclined: false
+};
 
-  init() {
-    this.addNotificationStyles();
-    this.setupEventListeners();
-    this.setupCandlePlacement();
-    this.setupItembarDrag();
-    this.setupTombstoneTextEditor();
-    this.loadUserData();
-    this.loadMemories();
-    this.loadPublicMemorials();
-    this.loadMineGardenFromLocal();
-  }
+// --- DOM elements ---
+const $ = id => document.getElementById(id);
+const introDialog = $('intro-dialog');
+const booksIcon = $('books-icon');
+const workspace = $('workspace');
+const toolbar = $('toolbar');
+const penHotspot = $('tool-pen-hotspot');
+const tapeHotspot = $('tool-tape-hotspot');
+const tweezersHotspot = $('tool-tweezers-hotspot');
+const magnifierHotspot = $('tool-magnifier-hotspot');
+const boxHotspot = $('tool-box-hotspot');
+const passSlot = $('tool-pass-slot');
+const fragmentPile = $('fragment-pile');
 
-  setupEventListeners() {
-    // 导航按钮
-    document.getElementById('nav-my-space').addEventListener('click', () => this.switchPage('my-space'));
-    document.getElementById('nav-public-space').addEventListener('click', () => this.switchPage('public-space'));
+// 工具列表
+const tools = {
+  pen: { state: 'isPenActive', element: penHotspot },
+  tape: { state: 'isTapeActive', element: tapeHotspot },
+  tweezers: { state: 'isTweezersActive', element: tweezersHotspot },
+  magnifier: { state: 'isMagnifierActive', element: magnifierHotspot },
+  box: { state: 'isBoxActive', element: boxHotspot },
+  pass: { state: 'isPassActive', element: passSlot }
+};
 
-    // 文件上传 - 我的空间
-    document.getElementById('upload-btn').addEventListener('click', () => {
-      console.log('Upload button clicked');
-      document.getElementById('file-input').click();
-    });
-    document.getElementById('file-input').addEventListener('change', (e) => this.handleFileUpload(e));
+// --- Level variables ---
+let mapDocument, canvas, ctx, isDrawing, hasDrawn;
+let letterDocument, placedFragments = {};
+let switchingImage, imageClickCount = 0;
+let image3Others, image3Lukas, passOthers, passLukas;
+let amelieDiaryDocument, amelieDiaryBlurred, amelieDiaryClear;
+let newsSwitchingImage, newsImageClickCount = 0;
+let explodeImage, newsImageClear, newsImageBlurred;
+let lukasDiaryDocument, lukasDiaryFragments = {}, currentLukasPuzzle = 1;
+let lukasImage1, lukasImage2, lukasImage3, vignetteLayer;
+let amelieLetterDocument, amelieLetterFragments = {};
+let lukasDiaryFinalDocument, lukasDiaryFinalFragments = {};
+let amelieDiaryFinalSwitchingImage, amelieDiaryFinalClickCount = 0;
+let amelieDiaryFinalImage, news2Image;
+let endImage;
+let blackOverlay, isFinalPhase = false;
 
-    // 创建我的花园按钮
-    document.getElementById('create-mine-btn').addEventListener('click', () => {
-      this.createMineGarden();
-    });
+// ===== 通用工具函数 =====
 
-    // 蜡烛工具
-    document.getElementById('candle-tool').addEventListener('click', () => {
-      this.selectTool('candle');
-    });
-
-    // 花朵工具
-    document.getElementById('flower-tool').addEventListener('click', () => {
-      this.selectTool('flower');
-    });
-
-    // 信封工具
-    document.getElementById('envelope-tool').addEventListener('click', () => {
-      this.selectTool('envelope');
-    });
-
-    // 雕刻刀工具
-    document.getElementById('knife-tool').addEventListener('click', () => {
-      this.selectTool('knife');
-    });
-
-    // 模态框关闭
-    document.querySelectorAll('.close').forEach(closeBtn => {
-      closeBtn.addEventListener('click', (e) => this.closeModal(e.target.closest('.modal')));
-    });
-
-    // 信纸模态框事件
-    document.getElementById('close-letter').addEventListener('click', () => {
-      this.closeModal(document.getElementById('letter-modal'));
-    });
-    document.getElementById('save-letter').addEventListener('click', () => {
-      this.saveLetter();
-    });
-    document.getElementById('cancel-letter').addEventListener('click', () => {
-      this.closeModal(document.getElementById('letter-modal'));
-    });
-
-    // 设置默认解封时间为1小时后
-    const now = new Date();
-    now.setHours(now.getHours() + 1);
-    document.getElementById('unlock-time').value = now.toISOString().slice(0, 16);
-    
-    // No Time Lock按钮事件
-    document.getElementById('no-time-btn').addEventListener('click', () => {
-      document.getElementById('unlock-time').value = '';
-    });
-
-    // 点击模态框外部关闭
-    document.querySelectorAll('.modal').forEach(modal => {
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-          this.closeModal(modal);
-        }
-      });
-    });
-
-
-  }
-
-  switchPage(pageId) {
-    // 隐藏所有页面
-    document.querySelectorAll('.page').forEach(page => {
-      page.classList.remove('active');
-    });
-
-    // 显示目标页面
-    document.getElementById(pageId).classList.add('active');
-
-    // 更新导航按钮状态
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-      btn.classList.remove('active');
-    });
-    document.getElementById(`nav-${pageId}`).classList.add('active');
-
-    // 页面特定逻辑
-    if (pageId === 'public-space') {
-      this.loadPublicMemorials();
-    }
-  }
-
-  closeModal(modal) {
-    modal.classList.remove('show');
-  }
-
-  createMineGarden() {
-    // 检查是否已经存在MINE花园
-    const existingCard = document.querySelector('.mine-garden-card');
-    if (existingCard) {
-      this.showNotification('Your garden already exists!', 'info');
-        return;
-    }
-    
-    // 创建MINE花园卡片
-    const container = document.getElementById('public-memorials');
-    const card = document.createElement('div');
-    card.className = 'memorial-card mine-garden-card';
-    card.innerHTML = `
-      <h3>🌟 MINE</h3>
-      <p>Click to visit my personal memorial garden</p>
-    `;
-    
-    // 点击卡片切换到我的空间
-    card.onclick = () => {
-      this.switchPage('my-space');
-      this.showNotification('Welcome to your garden!', 'info');
-    };
-
-    // 将卡片添加到列表顶部
-    container.insertBefore(card, container.firstChild);
-
-    // 保存到本地存储
-    this.saveMineGardenToLocal();
-
-    this.showNotification('Your garden has been created! Other users can now visit it.', 'success');
-  }
-
-  selectTool(toolName) {
-    console.log('selectTool called with:', toolName);
-    // 取消之前选中的工具
-    document.querySelectorAll('.tool-item').forEach(item => {
-      item.classList.remove('active');
-    });
-
-      if (this.activeTool === toolName) {
-        // 如果点击的是已选中的工具，取消选择
-        this.activeTool = null;
-        document.body.classList.remove('candle-cursor', 'flower-cursor', 'envelope-cursor', 'knife-cursor');
-        document.getElementById('itemarea').classList.remove('candle-cursor', 'flower-cursor', 'envelope-cursor', 'knife-cursor');
-        this.hideTombstoneCanvas();
-        this.hideUndoButton();
-        this.showNotification('Tool deselected', 'info');
-      } else {
-      // 选择新工具
-      this.activeTool = toolName;
-      document.getElementById(`${toolName}-tool`).classList.add('active');
-      
-      if (toolName === 'candle') {
-        document.body.classList.add('candle-cursor');
-        document.getElementById('itemarea').classList.add('candle-cursor');
-        this.hideUndoButton();
-        this.showNotification('Candle tool selected. Click to place candles.', 'info');
-      } else if (toolName === 'flower') {
-        document.body.classList.add('flower-cursor');
-        document.getElementById('itemarea').classList.add('flower-cursor');
-        this.hideUndoButton();
-        this.showNotification('Flower tool selected. Click to place flowers.', 'info');
-      } else if (toolName === 'envelope') {
-        document.body.classList.add('envelope-cursor');
-        document.getElementById('itemarea').classList.add('envelope-cursor');
-        this.hideUndoButton();
-        this.showNotification('Letter tool selected. Click to write a letter.', 'info');
-      } else if (toolName === 'knife') {
-        document.body.classList.add('knife-cursor');
-        document.getElementById('itemarea').classList.add('knife-cursor');
-        this.showTombstoneCanvas();
-        this.showUndoButton();
-        this.showNotification('Carving tool selected. Draw on the tombstone to carve.', 'info');
-      }
-    }
-  }
-
-  setupCandlePlacement() {
-    const itemArea = document.getElementById('itemarea');
-    
-    // 在 itemArea 上添加 mousedown 监听器，用于在新的交互开始时重置 dragJustEnded 标志
-    itemArea.addEventListener('mousedown', (e) => {
-      if (this.dragJustEnded) {
-        console.log('DEBUG: Mouse down on itemArea. Resetting dragJustEnded flag to FALSE.');
-        this.dragJustEnded = false;
-      }
-    });
-
-    itemArea.addEventListener('click', (e) => {
-      console.log('Click event:');
-      console.log('  activeTool:', this.activeTool);
-      console.log('  isDragging (global):', this.isDragging);
-      console.log('  dragJustEnded (global):', this.dragJustEnded);
-      console.log('  target:', e.target);
-
-      // 如果刚结束拖拽，强制阻止点击事件
-      if (this.dragJustEnded) {
-        console.log('Skipping click: dragJustEnded is TRUE. Preventing default and stopping propagation for this click.');
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      
-      // 如果正在拖拽，不创建新物品
-      if (this.isDragging) {
-        console.log('Skipping: isDragging');
-        return;
-      }
-      
-      // 如果点击的是已放置的物品，不创建新物品
-      if (e.target.closest('.candle-placed') || e.target.closest('.flower-placed') || e.target.closest('.letter-placed')) {
-        console.log('Skipping: clicked on placed item');
-        return;
-      }
-      
-      if (this.activeTool === 'candle') {
-        console.log('Creating candle');
-    e.preventDefault();
-        e.stopPropagation();
-        
-        const rect = itemArea.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        
-        this.placeCandle(x, y);
-      } else if (this.activeTool === 'flower') {
-        console.log('Creating flower');
-    e.preventDefault();
-        e.stopPropagation();
-        
-        const rect = itemArea.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        
-        this.placeFlower(x, y);
-      } else if (this.activeTool === 'envelope') {
-        console.log('Opening letter interface');
-        e.preventDefault();
-        e.stopPropagation();
-        
-        this.openLetterInterface();
-      } else {
-        console.log('No active tool selected');
-      }
-    });
-  }
-
-  setupItembarDrag() {
-    const itembar = document.getElementById('itembar');
-    
-    itembar.addEventListener('mousedown', (e) => {
-      // 只有在点击物品栏本身时才启动拖动，不是点击内部元素
-      if (e.target === itembar || e.target.classList.contains('itembar-content')) {
-        this.isDraggingItembar = true;
-        const rect = itembar.getBoundingClientRect();
-        this.itembarDragOffset.x = e.clientX - rect.left;
-        this.itembarDragOffset.y = e.clientY - rect.top;
-        
-        itembar.style.cursor = 'grabbing';
-        e.preventDefault();
-      }
-    });
-
-    document.addEventListener('mousemove', (e) => {
-      if (this.isDraggingItembar) {
-        const x = e.clientX - this.itembarDragOffset.x;
-        const y = e.clientY - this.itembarDragOffset.y;
-        
-        // 限制在屏幕范围内
-        const maxX = window.innerWidth - itembar.offsetWidth;
-        const maxY = window.innerHeight - itembar.offsetHeight;
-        
-        const constrainedX = Math.max(0, Math.min(x, maxX));
-        const constrainedY = Math.max(0, Math.min(y, maxY));
-        
-        itembar.style.left = `${constrainedX}px`;
-        itembar.style.top = `${constrainedY}px`;
-        itembar.style.transform = 'none';
-        itembar.style.bottom = 'auto';
-      }
-    });
-
-    document.addEventListener('mouseup', () => {
-      if (this.isDraggingItembar) {
-        this.isDraggingItembar = false;
-        itembar.style.cursor = 'move';
-        }
-    });
+// 背景渐变切换动效（切换到level bg）
+function switchBackgroundToLevel() {
+  const gameContainer = $('game-container');
+  
+  // 创建新背景层
+  const newBg = document.createElement('div');
+  newBg.style.cssText = `
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: url('level bg.jpg');
+    background-size: cover;
+    background-position: center;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 1.5s ease-in-out;
+  `;
+  gameContainer.appendChild(newBg);
+  
+  // 触发渐变动画
+  setTimeout(() => {
+    newBg.style.opacity = '1';
+  }, 50);
+  
+  // 动画完成后更新实际背景并移除临时层
+  setTimeout(() => {
+    gameContainer.style.backgroundImage = "url('level bg.jpg')";
+    newBg.remove();
+  }, 1600);
 }
 
-  placeCandle(x, y) {
-    const candleId = `candle_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // 创建蜡烛元素
-    const candle = document.createElement('div');
-    candle.className = 'candle-placed';
-    candle.dataset.candleId = candleId;
-    candle.style.left = `${x - 54}px`;
-    candle.style.top = `${y - 54}px`;
-    
-    // 创建蜡烛图片
-    const candleImg = document.createElement('img');
-    candleImg.src = 'candle.png';
-    candleImg.alt = 'Candle';
-    candleImg.style.width = '100%';
-    candleImg.style.height = '100%';
-    candleImg.style.objectFit = 'contain';
-    candleImg.style.imageRendering = 'pixelated';
-    candleImg.style.imageRendering = 'crisp-edges';
-    
-    // 如果图片加载失败，使用emoji作为后备
-    candleImg.onerror = () => {
-      candleImg.style.display = 'none';
-      candle.innerHTML = '🕯️';
-      candle.style.fontSize = '48px';
-      candle.style.display = 'flex';
-      candle.style.alignItems = 'center';
-      candle.style.justifyContent = 'center';
-    };
-    
-    candle.appendChild(candleImg);
-    
-    // 添加点击事件来切换光晕
-    candle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.toggleCandleGlow(candleId);
-    });
+// 背景渐变切换动效（切换回bg）
+function switchBackgroundToOriginal() {
+  const gameContainer = $('game-container');
+  
+  // 创建新背景层
+  const newBg = document.createElement('div');
+  newBg.style.cssText = `
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: url('bg.png');
+    background-size: cover;
+    background-position: center;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 1.5s ease-in-out;
+  `;
+  gameContainer.appendChild(newBg);
+  
+  // 触发渐变动画
+  setTimeout(() => {
+    newBg.style.opacity = '1';
+  }, 50);
+  
+  // 动画完成后更新实际背景并移除临时层
+  setTimeout(() => {
+    gameContainer.style.backgroundImage = "url('bg.png')";
+    newBg.remove();
+  }, 1600);
+}
 
-    // 添加拖拽功能
-    this.setupDrag(candle, 'candle', candleId);
-    
-    // 添加到场景
-    document.getElementById('itemarea').appendChild(candle);
-    
-    // 保存蜡烛数据
-    this.candles.push({
-      id: candleId,
-      x: x,
-      y: y,
-      isLit: false,
-      element: candle
-    });
-    
-    this.showNotification('Candle placed! Click to light, drag to move.', 'success');
+// 创建对话框
+function createDialog(text, options = {}) {
+  const dialog = document.createElement('div');
+  const {
+    width = '450px',
+    height = '180px',
+    position = 'center',
+    parent = $('game-container')
+  } = options;
+  
+  const styles = {
+    center: 'top: 50%; left: 50%; transform: translate(-50%, -50%);',
+    right: 'top: 10% !important; right: 10px !important; left: auto !important; transform: none !important; position: fixed !important;'
+  };
+  
+  dialog.style.cssText = `
+    position: absolute;
+    ${styles[position] || styles.center}
+    background-image: url('dialogue.png');
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    padding: 2rem 2.5rem;
+    z-index: ${position === 'right' ? 99999 : 10000};
+    width: ${width};
+    min-height: ${height};
+    font-family: 'Indie Flower', cursive;
+    color: #2a2520;
+    font-size: 1.3rem;
+    line-height: 1.4;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  `;
+  
+  dialog.innerHTML = `<p>${text}</p>`;
+  (position === 'right' ? document.body : parent).appendChild(dialog);
+  
+  setTimeout(() => dialog.style.opacity = '1', 100);
+  return dialog;
+}
+
+// 自动移除对话框
+function autoRemoveDialog(dialog, delay = 3000) {
+  setTimeout(() => {
+    dialog.style.opacity = '0';
+    setTimeout(() => dialog.remove(), 300);
+  }, delay);
+}
+
+// 通用工具选择
+function selectTool(toolName) {
+  // Box 工具特殊处理：显示对话框而不是选中
+  if (toolName === 'box') {
+    showBoxDialog();
+    return;
   }
-
-  placeFlower(x, y) {
-    const flowerId = `flower_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // 创建花朵元素
-    const flower = document.createElement('div');
-    flower.className = 'flower-placed';
-    flower.dataset.flowerId = flowerId;
-    flower.style.left = `${x - 54}px`;
-    flower.style.top = `${y - 54}px`;
-    
-    // 创建花朵图片
-    const flowerImg = document.createElement('img');
-    flowerImg.src = 'flower.png';
-    flowerImg.alt = 'Flower';
-    flowerImg.style.width = '100%';
-    flowerImg.style.height = '100%';
-    flowerImg.style.objectFit = 'contain';
-    flowerImg.style.imageRendering = 'pixelated';
-    flowerImg.style.imageRendering = 'crisp-edges';
-    
-    // 如果图片加载失败，使用emoji作为后备
-    flowerImg.onerror = () => {
-      flowerImg.style.display = 'none';
-      flower.innerHTML = '🌸';
-      flower.style.fontSize = '48px';
-      flower.style.display = 'flex';
-      flower.style.alignItems = 'center';
-      flower.style.justifyContent = 'center';
-    };
-    
-    flower.appendChild(flowerImg);
-    
-    // 添加拖拽功能
-    this.setupDrag(flower, 'flower', flowerId);
-    
-    // 添加到场景
-    document.getElementById('itemarea').appendChild(flower);
-    
-    // 保存花朵数据
-    this.flowers.push({
-      id: flowerId,
-      x: x,
-      y: y,
-      element: flower
-    });
-    
-    this.showNotification('Flower placed! Drag to move.', 'success');
-  }
-
-  removeFlower(flowerId) {
-    const flower = this.flowers.find(f => f.id === flowerId);
-    if (flower) {
-      // 从DOM中移除
-      flower.element.remove();
-      
-      // 从数组中移除
-      this.flowers = this.flowers.filter(f => f.id !== flowerId);
-      
-      this.showNotification('Flower removed', 'info');
-    }
-  }
-
-  setupDrag(element, type, id) {
-    let isDragging = false;
-    let dragOffset = { x: 0, y: 0 };
-    let startTime = 0;
-    let hasMoved = false;
-    let startX = 0;
-    let startY = 0;
-    let dragJustEnded = false;
-
-    const handleMouseMove = (e) => {
-      if (!isDragging && !hasMoved) {
-        // 检测是否开始拖拽 - 增加时间延迟和距离阈值
-        const threshold = 15; // 增加距离阈值
-        const timeElapsed = Date.now() - startTime;
-        const distance = Math.sqrt(Math.pow(e.clientX - startX, 2) + Math.pow(e.clientY - startY, 2));
-        
-        // 只有在鼠标按下超过200ms且移动距离超过阈值时才认为是拖拽
-        if (timeElapsed > 200 && distance > threshold) {
-          hasMoved = true;
-          isDragging = true;
-          this.isDragging = true;
-          this.dragJustEnded = false;
-          element.style.cursor = 'grabbing';
-          console.log('Drag started - movement detected');
-        }
+  
+  const tool = tools[toolName];
+  gameState[tool.state] = !gameState[tool.state];
+  
+  // 取消其他工具
+  if (gameState[tool.state]) {
+    Object.entries(tools).forEach(([name, t]) => {
+      if (name !== toolName) {
+        gameState[t.state] = false;
+        t.element.style.transform = 'scale(1)';
       }
-      
-      if (isDragging) {
-        // 根据不同类型使用不同的偏移量
-        let offset = 54; // 默认偏移量（蜡烛、花朵、信封）
-        if (type === 'memory') {
-          offset = 75; // 记忆图片的偏移量
-        }
-        
-        // 鼠标位置减去偏移量，使图像中心跟随鼠标
-        const x = e.clientX - dragOffset.x - offset;
-        const y = e.clientY - dragOffset.y - offset;
-        
-        element.style.left = `${x}px`;
-        element.style.top = `${y}px`;
-        element.style.transform = 'none';
-        
-        // 更新数据中的位置（图像中心位置）
-        if (type === 'candle') {
-          const candle = this.candles.find(c => c.id === id);
-          if (candle) {
-            candle.x = x + 54; // 54是图像宽度的一半
-            candle.y = y + 54; // 54是图像高度的一半
-            
-            // 如果蜡烛是点亮的，同时移动火光
-            if (candle.isLit) {
-              const glow = document.querySelector(`[data-candle-id="${id}"].candle-glow`);
-              if (glow) {
-                // 火光位置 = 蜡烛中心位置 - 火光中心偏移
-                // candle.x 和 candle.y 已经是蜡烛中心位置
-                glow.style.left = `${candle.x - 100}px`;
-                glow.style.top = `${candle.y - 100}px`;
-              }
-            }
-          }
-        } else if (type === 'flower') {
-          const flower = this.flowers.find(f => f.id === id);
-          if (flower) {
-            flower.x = x + 54; // 54是图像宽度的一半
-            flower.y = y + 54; // 54是图像高度的一半
-          }
-        } else if (type === 'letter') {
-          const letter = this.letters.find(l => l.id === id);
-          if (letter) {
-            letter.x = x + 54; // 54是信封宽度的一半
-            letter.y = y + 54; // 54是信封高度的一半
-          }
-        } else if (type === 'memory') {
-          const memory = this.memories.find(m => m.id === id);
-          if (memory) {
-            memory.x = x + 75; // 75是记忆图片宽度的一半
-            memory.y = y + 75; // 75是记忆图片高度的一半
-          }
-        }
-        
-        // 检查是否拖拽到垃圾桶附近，添加高亮效果
-        const trashBin = document.getElementById('trash-bin');
-        const trashRect = trashBin.getBoundingClientRect();
-        const elementRect = element.getBoundingClientRect();
-        
-        // 检查是否与垃圾桶重叠
-        const isOverTrash = !(elementRect.right < trashRect.left || 
-                             elementRect.left > trashRect.right || 
-                             elementRect.bottom < trashRect.top || 
-                             elementRect.top > trashRect.bottom);
-        
-        if (isOverTrash) {
-          trashBin.classList.add('drag-over');
-        } else {
-          trashBin.classList.remove('drag-over');
-        }
-      }
-    };
+    });
+    
+    // 放大当前工具（效果更明显）
+    tool.element.style.transform = 'scale(1.35)';
+    
+    if (canvas && toolName === 'pen') canvas.style.cursor = 'crosshair';
+  } else {
+    tool.element.style.transform = 'scale(1)';
+    if (canvas) canvas.style.cursor = 'default';
+  }
+}
 
-    const handleMouseUp = (e) => {
-      if (isDragging) {
-        // 拖动结束
-        isDragging = false;
-        this.isDragging = false;
-        dragJustEnded = true;
-        element.style.cursor = 'grab';
-        
-        console.log('Drag ended, resetting isDragging');
-        
-        // 检查是否拖拽到垃圾桶
-        const trashBin = document.getElementById('trash-bin');
-        const trashRect = trashBin.getBoundingClientRect();
-        const elementRect = element.getBoundingClientRect();
-        
-        // 检查是否与垃圾桶重叠
-        const isOverTrash = !(elementRect.right < trashRect.left || 
-                             elementRect.left > trashRect.right || 
-                             elementRect.bottom < trashRect.top || 
-                             elementRect.top > trashRect.bottom);
-        
-        if (isOverTrash) {
-          // 拖拽到垃圾桶，删除物品
-          console.log('Item dragged to trash, deleting:', type, id);
-          this.deleteItem(type, id);
-        }
-        
-        // 移除垃圾桶的高亮效果
-        trashBin.classList.remove('drag-over');
-        
-        // 阻止事件冒泡，防止触发点击事件
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // 立即设置全局标志
-        this.dragJustEnded = true;
-        console.log('DEBUG: this.dragJustEnded set to TRUE in handleMouseUp:', this.dragJustEnded);
-        
-        // 延迟重置拖拽标志，确保点击事件被正确阻止
+// 显示 Box 对话框
+function showBoxDialog() {
+  // 如果在最终阶段，显示密码轮盘
+  if (isFinalPhase) {
+    showPasswordWheel();
+    return;
+  }
+  
+  const dialog = createDialog('Cannot open...', {
+    width: '350px',
+    height: '120px',
+    position: 'right',
+    parent: document.body
+  });
+  dialog.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dialog.remove();
+  });
+  autoRemoveDialog(dialog, 3000);
+}
+
+// 重置所有工具
+function resetAllTools() {
+  Object.entries(tools).forEach(([name, tool]) => {
+    gameState[tool.state] = false;
+    tool.element.style.transform = 'scale(1)';
+  });
+}
+
+// 淡出并移除元素
+function fadeOutRemove(element, callback) {
+  if (!element) return;
+  element.style.transition = 'opacity 0.5s ease-out';
+  element.style.opacity = '0';
+  setTimeout(() => {
+    if (element.parentNode) element.parentNode.removeChild(element);
+    if (callback) callback();
+  }, 500);
+}
+
+// 更新存档
+function updateArchive(title, desc) {
+  gameState.archive.push({ title, description: desc });
+}
+
+// ===== 游戏流程 =====
+
+window.onload = () => {
+  booksIcon.addEventListener('click', handleBooksClick);
+  
+  penHotspot.addEventListener('click', () => selectTool('pen'));
+  tapeHotspot.addEventListener('click', () => selectTool('tape'));
+  tweezersHotspot.addEventListener('click', () => selectTool('tweezers'));
+  magnifierHotspot.addEventListener('click', () => selectTool('magnifier'));
+  boxHotspot.addEventListener('click', () => selectTool('box'));
+};
+
+function handleBooksClick() {
+  // 如果玩家拒绝修复信件，显示"没有更多东西"
+  if (gameState.gamePhase === 13 && gameState.amelieLetterDeclined) {
+    showNoMoreItemsDialog();
+    return;
+  }
+  
+  const phases = {
+    0: startMapPhase,
+    2: startPuzzlePhase,
+    4: startImageSwitchingPhase,
+    6: showAmelieDiary,
+    8: startNewsPhase,
+    11: startLukasDiaryPuzzle,
+    13: startAmelieLetterPuzzle,
+    15: startLukasDiaryFinalPuzzle,
+    17: startAmelieDiaryFinalSwitching,
+    19: startEndPhase
+  };
+  phases[gameState.gamePhase]?.();
+}
+
+function showNoMoreItemsDialog() {
+  const dialog = createDialog('It seems there are no more items...', {
+    width: '400px',
+    height: '150px',
+    position: 'center'
+  });
+  
+  dialog.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fadeOutRemove(dialog);
+  });
+  
+  autoRemoveDialog(dialog, 3000);
+}
+
+// ===== Pass 盖章功能 =====
+
+function placePassStamp(e) {
+  const gameContainer = $('game-container');
+  const rect = gameContainer.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  
+  const passStamp = document.createElement('img');
+  passStamp.src = 'pass.png';
+  passStamp.className = 'placed-pass';
+  passStamp.style.cssText = `
+    position: absolute;
+    width: 150px;
+    height: 150px;
+    left: ${x - 75}px;
+    top: ${y - 75}px;
+    pointer-events: none;
+    z-index: 10000;
+  `;
+  
+  gameContainer.appendChild(passStamp);
+  passSlot.style.display = 'none';
+  gameState.isPassActive = false;
+  passSlot.style.backgroundColor = 'transparent';
+  passSlot.style.border = 'none';
+}
+
+// ===== 第一关：地图 =====
+
+function startMapPhase() {
+  gameState.gamePhase = 1;
+  
+  introDialog.style.opacity = '0';
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    introDialog.style.display = 'none';
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    initMapLevel();
+  }, 1700);
+}
+
+function initMapLevel() {
+  if (gameState.mapRepaired || mapDocument) return;
+  
+  mapDocument = document.createElement('div');
+  mapDocument.id = 'map-document';
+  mapDocument.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 900px;
+    height: 650px;
+    opacity: 0;
+    animation: fadeIn 1s ease-out forwards;
+  `;
+  mapDocument.innerHTML = `
+    <img src="map.png" style="width: 100%; height: 100%; object-fit: contain;">
+    <canvas id="drawing-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></canvas>
+  `;
+  workspace.appendChild(mapDocument);
+  
+  canvas = $('drawing-canvas');
+  canvas.width = 900;
+  canvas.height = 650;
+  ctx = canvas.getContext('2d');
+  ctx.strokeStyle = '#2a1a0a';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+
+  canvas.addEventListener('mousedown', startDrawing);
+  canvas.addEventListener('mouseup', stopDrawing);
+  canvas.addEventListener('mousemove', draw);
+  canvas.addEventListener('mouseleave', stopDrawing);
+  
+  const toolTip = createDialog('You have some <span style="color: #d32f2f;">tools</span> to use', {
+    width: '350px',
+    height: '120px',
+    position: 'right',
+    parent: document.body
+  });
+  autoRemoveDialog(toolTip, 4000);
+}
+
+function startDrawing(e) {
+  if (!gameState.isPenActive) return;
+  isDrawing = true;
+    hasDrawn = true; 
+    draw(e); 
+}
+
+function stopDrawing() {
+  if (!isDrawing) return;
+  isDrawing = false;
+    ctx.beginPath(); 
+  if (hasDrawn && !gameState.mapRepaired) completeMapLevel();
+}
+
+function draw(e) {
+  if (!isDrawing || !gameState.isPenActive) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  ctx.lineTo(x, y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+}
+
+function completeMapLevel() {
+  gameState.mapRepaired = true;
+  gameState.gamePhase = 2;
+  updateArchive('疑似城市街道图残片', '已修复。');
+  
+  resetAllTools();
+  if (canvas) canvas.style.cursor = 'default';
+
+  const closeMapOnBgClick = (e) => {
+    if (e.target.id === 'game-container') {
+      fadeOutRemove(mapDocument, () => {
+      mapDocument = null;
+      canvas = null;
+        resetAllTools();
+        switchBackgroundToOriginal();
         setTimeout(() => {
-          this.dragJustEnded = false;
-          console.log('DEBUG: this.dragJustEnded reset to FALSE after delay');
-        }, 100);
-        
-        // 移除事件监听器
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-      } else {
-        // 没有拖拽，允许点击事件正常触发
-        console.log('No drag detected, allowing click event');
-        hasMoved = false;
-        this.isDragging = false;
-        
-        // 移除事件监听器
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-      }
-    };
+        booksIcon.style.display = 'block';
+        setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+        }, 1700);
+      });
+      $('game-container').removeEventListener('click', closeMapOnBgClick);
+    }
+  };
+  $('game-container').addEventListener('click', closeMapOnBgClick);
+}
 
-    element.addEventListener('mousedown', (e) => {
-      startTime = Date.now();
-      hasMoved = false;
-      isDragging = false;
-      dragJustEnded = false;
-      this.isDragging = false;
-      this.dragJustEnded = false;
+// ===== 第二关：拼图 =====
+
+function startPuzzlePhase() {
+  gameState.gamePhase = 3;
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    const puzzleDialog = createDialog('You found some fragments with something written on them...');
+    
+    setTimeout(() => {
+      puzzleDialog.style.opacity = '0';
+      setTimeout(() => {
+        puzzleDialog.remove();
+        initLetterPuzzle();
+      }, 1500);
+    }, 2500);
+  }, 1700);
+}
+
+function initLetterPuzzle() {
+  const containerWidth = 800; 
+  const containerHeight = 800; 
+  const fragmentSize = 200;
+  
+    letterDocument = document.createElement('div');
+    letterDocument.id = 'letter-document';
+    letterDocument.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: ${containerWidth}px;
+      height: ${containerHeight}px;
+    z-index: 500;
+    `;
+    workspace.appendChild(letterDocument);
+  
+  // 创建 3x3 网格目标位置
+  const puzzlePositions = [
+    { row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 2 },
+    { row: 1, col: 0 }, { row: 1, col: 1 }, { row: 1, col: 2 },
+    { row: 2, col: 0 }, { row: 2, col: 1 }, { row: 2, col: 2 }
+  ];
+  
+    const offsetX = (containerWidth - fragmentSize * 3) / 2;
+    const offsetY = 50;
+    
+  // 创建目标格子
+    for (let i = 0; i < 9; i++) {
+      const pos = puzzlePositions[i];
+      const target = document.createElement('div');
+      target.className = 'fragment-target';
+      target.id = `piece-${i}`;
+      target.dataset.correctPiece = i;
+      target.style.cssText = `
+        position: absolute;
+        top: ${offsetY + pos.row * fragmentSize}px;
+        left: ${offsetX + pos.col * fragmentSize}px;
+        width: ${fragmentSize}px;
+        height: ${fragmentSize}px;
+        outline: 1px dashed rgba(255, 255, 255, 0.3);
+        outline-offset: -1px;
+      `;
+    letterDocument.appendChild(target);
+  }
+  
+  // 创建拼图块（随机打乱）
+  const pieces = [...Array(9).keys()];
+  const positions = [...Array(9).keys()];
+  positions.sort(() => Math.random() - 0.5);
+    
+    pieces.forEach((pieceNum, index) => {
+      const piece = document.createElement('div');
+      piece.className = 'draggable-fragment';
+      piece.id = `draggable-piece-${pieceNum}`;
+      piece.dataset.pieceNum = pieceNum;
+      
+      const pos = puzzlePositions[pieceNum];
+      const bgX = (pos.col / 2) * 100;
+      const bgY = (pos.row / 2) * 100;
+      
+      const randomPos = puzzlePositions[positions[index]];
+      const leftPos = offsetX + randomPos.col * fragmentSize;
+      const topPos = offsetY + randomPos.row * fragmentSize;
+      
+      piece.style.cssText = `
+        position: absolute;
+        left: ${leftPos}px;
+        top: ${topPos}px;
+        width: ${fragmentSize}px;
+        height: ${fragmentSize}px;
+        background-image: url('letter-complete.png');
+        background-size: 300% 300%;
+        background-position: ${bgX}% ${bgY}%;
+        cursor: grab;
+        z-index: 9999;
+        box-shadow: 3px 3px 10px rgba(0,0,0,0.5);
+      `;
+      
+      makePieceDraggable(piece);
+    letterDocument.appendChild(piece);
+    });
+  }
+  
+  function makePieceDraggable(piece) {
+    let isDragging = false;
+  let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
+    let isPlaced = false;
+    
+    piece.addEventListener('mousedown', (e) => {
+    if (isPlaced || !gameState.isTapeActive) return;
+      
+      isDragging = true;
+      piece.style.cursor = 'grabbing';
+      piece.style.opacity = '0.8';
+      piece.style.zIndex = '10000';
       
       startX = e.clientX;
       startY = e.clientY;
       
-      const rect = element.getBoundingClientRect();
-      // 计算鼠标相对于图像中心的偏移量
-      dragOffset.x = e.clientX - (rect.left + rect.width / 2);
-      dragOffset.y = e.clientY - (rect.top + rect.height / 2);
+      const rect = piece.getBoundingClientRect();
+      const parentRect = piece.parentElement.getBoundingClientRect();
+      initialLeft = rect.left - parentRect.left;
+      initialTop = rect.top - parentRect.top;
+      
       e.preventDefault();
-      e.stopPropagation();
-      
-      console.log('Mouse down on', type, 'element');
-      
-      // 添加拖动事件监听器
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    });
-  }
-
-
-  isOverlapping(rect1, rect2) {
-    return !(rect1.right < rect2.left || 
-             rect1.left > rect2.right || 
-             rect1.bottom < rect2.top || 
-             rect1.top > rect2.bottom);
-  }
-
-  removeCandle(candleId) {
-    const candle = this.candles.find(c => c.id === candleId);
-    if (candle) {
-      // 移除光晕
-      const glow = document.querySelector(`[data-candle-id="${candleId}"].candle-glow`);
-      if (glow) {
-        glow.remove();
-      }
-      
-      // 从DOM中移除
-      candle.element.remove();
-      
-      // 从数组中移除
-      this.candles = this.candles.filter(c => c.id !== candleId);
-      
-      this.showNotification('Candle removed', 'info');
-    }
-  }
-
-  toggleCandleGlow(candleId) {
-    const candle = this.candles.find(c => c.id === candleId);
-    let glow = document.querySelector(`[data-candle-id="${candleId}"].candle-glow`);
-    
-    if (candle) {
-      if (candle.isLit) {
-        // 熄灭蜡烛 - 移除光晕
-        if (glow) {
-          glow.remove();
-        }
-        candle.isLit = false;
-        this.showNotification('Candle extinguished', 'info');
-            } else {
-        // 点燃蜡烛 - 创建光晕
-        if (!glow) {
-          glow = document.createElement('div');
-          glow.className = 'candle-glow';
-          glow.dataset.candleId = candleId;
-          glow.style.left = `${candle.x - 100}px`;
-          glow.style.top = `${candle.y - 100}px`;
-          
-          // 将光晕添加到蜡烛元素之前
-          candle.element.parentNode.insertBefore(glow, candle.element);
-        }
-        glow.classList.add('intense');
-        candle.isLit = true;
-        this.showNotification('Candle lit!', 'success');
-      }
-    }
-  }
-
-  async uploadFile(file) {
-    try {
-      const formData = new FormData();
-      formData.append('image', file);
-      formData.append('userId', this.currentUser.id);
-
-      const response = await fetch(`${this.apiBaseUrl}/memory`, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (response.ok) {
-        const memoryData = await response.json();
-        return memoryData;
-      } else {
-        throw new Error('Upload failed');
-      }
-    } catch (error) {
-      console.error('Upload error:', error);
-      // 离线模式：创建本地内存数据
-      const memoryData = {
-        id: `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        imageUrl: URL.createObjectURL(file),
-        filename: file.name,
-        hp: 100,
-        createdAt: new Date().toISOString()
-      };
-      return memoryData;
-    }
-  }
-
-  async handleFileUpload(e) {
-    console.log('handleFileUpload called');
-    const file = e.target.files[0];
-    if (!file) {
-      console.log('No file selected');
-      return;
-    }
-    console.log('File selected:', file.name, file.type);
-
-    if (!file.type.startsWith('image/')) {
-      this.showNotification('Please select an image file.', 'error');
-      return;
-    }
-
-    try {
-      const memoryData = await this.uploadFile(file);
-      console.log('Memory data created:', memoryData);
-      
-      // 直接放置在场景中，就像花朵一样
-      const x = Math.random() * (window.innerWidth - 200) + 100;
-      const y = Math.random() * (window.innerHeight - 200) + 100;
-      this.placeMemoryInScene(memoryData, x, y);
-      
-      this.showNotification('Memory uploaded and placed in scene!', 'success');
-    } catch (error) {
-      console.error('Error uploading file:', error);
-      this.showNotification('Failed to upload image', 'error');
-    }
-
-    // 重置文件输入
-    e.target.value = '';
-  }
-
-  placeMemoryInScene(memoryData, x, y) {
-    console.log('placeMemoryInScene called with:', memoryData, x, y);
-    
-    // 创建记忆元素
-    const memory = document.createElement('div');
-    memory.className = 'memory-placed';
-    memory.dataset.memoryId = memoryData.id;
-    memory.style.left = `${x - 60}px`; // 60是图像宽度的一半 (120px)
-    memory.style.top = `${y - 60}px`; // 60是图像高度的一半 (120px)
-    
-    // 创建记忆图片容器
-    const memoryContainer = document.createElement('div');
-    memoryContainer.style.cssText = `
-      position: relative;
-      display: inline-block;
-      animation: floating 3s ease-in-out infinite;
-    `;
-    
-    // 创建像素相框
-    const pixelFrame = document.createElement('div');
-    pixelFrame.className = 'pixel-frame';
-    pixelFrame.style.cssText = `
-      width: 120px;
-      height: 120px;
-      background: transparent;
-      padding: 2px;
-      position: relative;
-    `;
-    
-    
-    // 创建记忆图片
-    const memoryImg = document.createElement('img');
-    memoryImg.src = memoryData.imageUrl;
-    memoryImg.alt = memoryData.filename || 'Memory';
-    memoryImg.style.cssText = `
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      opacity: 0.7;
-      transition: opacity 0.3s ease;
-    `;
-    
-    pixelFrame.appendChild(memoryImg);
-    
-    // 创建生命值条
-    const lifeBar = document.createElement('div');
-    lifeBar.className = 'memory-life-bar';
-    lifeBar.style.cssText = `
-      position: absolute;
-      bottom: -12px;
-      left: 0;
-      right: 0;
-      width: 120px;
-      height: 6px;
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 3px;
-      overflow: hidden;
-    `;
-    
-    const lifeFill = document.createElement('div');
-    lifeFill.className = 'memory-life-fill high';
-    lifeFill.style.height = '100%';
-    lifeFill.style.width = '100%';
-    lifeFill.style.backgroundColor = '#4CAF50';
-    lifeFill.style.transition = 'width 0.3s ease, background-color 0.3s ease';
-    
-    lifeBar.appendChild(lifeFill);
-    memoryContainer.appendChild(pixelFrame);
-    memoryContainer.appendChild(lifeBar);
-    memory.appendChild(memoryContainer);
-    
-    // 添加点击事件来预览图片
-    memory.addEventListener('click', (e) => {
-      e.stopPropagation();
-      
-      // 检查是否刚结束拖拽
-      if (this.dragJustEnded) {
-        console.log('Memory click blocked: dragJustEnded is true');
-        e.preventDefault();
-        return;
-      }
-      
-      console.log('Memory click allowed: opening preview');
-      this.previewMemory(memoryData, memory);
     });
     
-    // 添加拖拽功能
-    this.setupDrag(memory, 'memory', memoryData.id);
-    
-    // 添加到场景
-    const itemarea = document.getElementById('itemarea');
-    console.log('Adding memory to itemarea:', itemarea);
-    itemarea.appendChild(memory);
-    console.log('Memory added to scene successfully');
-    
-    // 保存记忆数据到数组中
-    if (!this.memories) {
-      this.memories = [];
-    }
-    
-    // 检查是否已存在相同的记忆
-    const existingIndex = this.memories.findIndex(m => m.id === memoryData.id);
-    if (existingIndex !== -1) {
-      // 更新现有记忆的位置
-      this.memories[existingIndex].x = x;
-      this.memories[existingIndex].y = y;
-      this.memories[existingIndex].element = memory;
-    } else {
-      // 添加新记忆
-      this.memories.push({
-        id: memoryData.id,
-        x: x,
-        y: y,
-        imageUrl: memoryData.imageUrl,
-        filename: memoryData.filename,
-        element: memory,
-        hp: memoryData.hp || 100,
-        maxHp: 100,
-        createdAt: memoryData.createdAt || new Date().toISOString(),
-        isPreviewing: false,
-        lifeFill: lifeFill,
-        memoryImg: memoryImg
-      });
-    }
-    
-    // 保存到本地存储
-    this.saveMemoriesToLocal();
-    
-    // 开始生命值衰减
-    this.startMemoryLifeDecay(memoryData.id);
-  }
-
-  previewMemory(memoryData, memoryElement) {
-    const memory = this.memories.find(m => m.id === memoryData.id);
-    if (!memory || memory.isPreviewing) return;
-    
-    memory.isPreviewing = true;
-    
-    // 创建预览模态框
-    const modal = document.createElement('div');
-    modal.className = 'memory-preview-modal';
-    modal.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.8);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      z-index: 9999;
-      cursor: pointer;
-    `;
-    
-    const modalContent = document.createElement('div');
-    modalContent.style.cssText = `
-      max-width: 80vw;
-      max-height: 80vh;
-      width: auto;
-      height: auto;
-      position: relative;
-      background: white;
-      border-radius: 8px;
-      padding: 20px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    `;
-    
-    const closeBtn = document.createElement('button');
-    closeBtn.innerHTML = '&times;';
-    closeBtn.style.cssText = `
-      position: absolute;
-      top: 10px;
-      right: 15px;
-      background: none;
-      border: none;
-      font-size: 24px;
-      cursor: pointer;
-      color: #666;
-    `;
-    
-    const img = document.createElement('img');
-    img.src = memoryData.imageUrl;
-    img.style.cssText = `
-      max-width: 70vw;
-      max-height: 60vh;
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      border-radius: 4px;
-      border: 2px solid #ddd;
-    `;
-    
-    modalContent.appendChild(closeBtn);
-    modalContent.appendChild(img);
-    modal.appendChild(modalContent);
-    document.body.appendChild(modal);
-    
-    // 关闭事件
-    const closeModal = () => {
-      document.body.removeChild(modal);
-      memory.isPreviewing = false;
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging || isPlaced) return;
       
-      // 恢复生命值
-      memory.hp = Math.min(100, memory.hp + 30);
-      this.updateMemoryLifeDisplay(memory);
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
       
-      this.showNotification('Memory life restored!', 'success');
-    };
-    
-    closeBtn.addEventListener('click', closeModal);
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) closeModal();
+      piece.style.left = (initialLeft + deltaX) + 'px';
+      piece.style.top = (initialTop + deltaY) + 'px';
     });
-  }
-
-  updateMemoryLifeDisplay(memory) {
-    const lifeFill = memory.lifeFill;
-    const memoryImg = memory.memoryImg;
     
-    if (lifeFill) {
-      lifeFill.style.width = `${memory.hp}%`;
+  document.addEventListener('mouseup', () => {
+      if (!isDragging || isPlaced) return;
+      isDragging = false;
+      piece.style.cursor = 'grab';
+      piece.style.opacity = '1';
+      piece.style.zIndex = '9999';
       
-      // 更新生命值条颜色
-      if (memory.hp > 70) {
-        lifeFill.style.backgroundColor = '#4CAF50';
-        lifeFill.className = 'memory-life-fill high';
-      } else if (memory.hp > 40) {
-        lifeFill.style.backgroundColor = '#FF9800';
-        lifeFill.className = 'memory-life-fill medium';
-      } else {
-        lifeFill.style.backgroundColor = '#F44336';
-        lifeFill.className = 'memory-life-fill low';
-      }
-    }
-    
-    // 更新图片透明度 - 随生命值减少而减小
-    if (memoryImg) {
-      if (memory.hp <= 0) {
-        // 生命值为0时，开始淡出动画
-        memoryImg.style.transition = 'opacity 2s ease-out';
-        memoryImg.style.opacity = '0';
-        
-        // 2秒后删除记忆
-        setTimeout(() => {
-          this.removeMemory(memory.id);
-        }, 2000);
-      } else {
-        // 透明度随生命值线性减少：70%基础透明度 + 生命值百分比
-        const baseOpacity = 0.7;
-        const lifeOpacity = (memory.hp / 100) * 0.3; // 生命值贡献0-30%透明度
-        const totalOpacity = baseOpacity + lifeOpacity;
-        memoryImg.style.opacity = totalOpacity.toString();
-      }
-    }
-  }
-
-  startMemoryLifeDecay(memoryId) {
-    const memory = this.memories.find(m => m.id === memoryId);
-    if (!memory) return;
-    
-    // 每10秒减少1%生命值
-    const decayInterval = setInterval(() => {
-      const currentMemory = this.memories.find(m => m.id === memoryId);
-      if (!currentMemory) {
-        clearInterval(decayInterval);
-        return;
-      }
+      const pieceNum = parseInt(piece.dataset.pieceNum);
+    const target = $(`piece-${pieceNum}`);
       
-      if (!currentMemory.isPreviewing) {
-        currentMemory.hp = Math.max(0, currentMemory.hp - 1);
-        this.updateMemoryLifeDisplay(currentMemory);
-        this.saveMemoriesToLocal();
-      }
-    }, 10000);
-    
-    // 保存间隔ID以便后续清理
-    memory.decayInterval = decayInterval;
-  }
-
-
-
-  async loadMemories() {
-    if (!this.currentUser) return;
-
-    try {
-      const response = await fetch(`${this.apiBaseUrl}/memory/my?userId=${this.currentUser.id}`);
-      if (response.ok) {
-        const memories = await response.json();
-        this.memories = memories;
-        this.renderMemories();
-      }
-    } catch (error) {
-      console.error('Load memories error:', error);
-      // 离线模式：从本地存储加载
-      this.loadMemoriesFromLocal();
-    }
-  }
-
-  saveMemoriesToLocal() {
-    localStorage.setItem('dreamGardenMemories', JSON.stringify(this.memories));
-  }
-
-  loadMemoriesFromLocal() {
-    const localMemories = JSON.parse(localStorage.getItem('dreamGardenMemories') || '[]');
-    this.memories = localMemories;
-    this.renderMemories();
-  }
-
-  renderMemories() {
-    // 清空现有记忆元素
-    document.querySelectorAll('.memory-placed').forEach(memory => memory.remove());
-    
-    // 渲染记忆元素
-    this.memories.forEach(memory => {
-      if (memory.x && memory.y && memory.imageUrl && !memory.element) {
-        this.placeMemoryInScene(memory, memory.x, memory.y);
+      const pieceRect = piece.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      
+      if (isOverlapping(pieceRect, targetRect)) {
+        isPlaced = true;
+      placePiece(piece, target, pieceNum);
       }
     });
   }
-
-  async loadPublicMemorials() {
-    try {
-      const response = await fetch(`${this.apiBaseUrl}/public-memorials`);
-      if (response.ok) {
-        const memorials = await response.json();
-        this.renderPublicMemorials(memorials);
-      }
-    } catch (error) {
-      console.error('Load public memorials error:', error);
-      // 显示示例数据
-      this.renderPublicMemorials([
-        { id: 'demo1', username: 'Dreamer1', memorialText: 'In Memory of Joy', isPublic: true },
-        { id: 'demo2', username: 'Dreamer2', memorialText: 'Remembering Love', isPublic: true }
-      ]);
-    }
-  }
-
-  renderPublicMemorials(memorials) {
-    const container = document.getElementById('public-memorials');
-    container.innerHTML = '';
-
-    // 首先添加MINE花园（如果存在）
-    this.loadMineGardenFromLocal();
-
-    memorials.forEach(memorial => {
-      const card = document.createElement('div');
-      card.className = 'memorial-card';
-      card.innerHTML = `
-        <h3>${memorial.username}'s Garden</h3>
-        <p>${memorial.memorialText}</p>
-      `;
-      card.onclick = () => this.visitMemorial(memorial.id);
-      container.appendChild(card);
-    });
-  }
-
-  addMyMemorySpaceToPublic() {
-    // 检查是否已经存在我的空间模块
-    const existingCard = document.querySelector('.my-memory-space-card');
-    if (existingCard) {
-      existingCard.remove();
-    }
-
-    // 创建新的"MY MEMORY SPACE"卡片
-    const container = document.getElementById('public-memorials');
-    const card = document.createElement('div');
-    card.className = 'memorial-card my-memory-space-card';
-    card.innerHTML = `
-      <div class="my-space-header">
-        <h3>🌱 MY MEMORY SPACE</h3>
-        <div class="memory-count">${this.memories.length} memories</div>
-      </div>
-      <p>Click to visit your personal memorial garden</p>
-      <div class="my-space-preview">
-        <div class="preview-memories">
-          ${this.generateMemoryPreview()}
-        </div>
-      </div>
-    `;
-    
-    // 点击卡片切换到我的空间
-    card.onclick = () => {
-      this.switchPage('my-space');
-      this.showNotification('Welcome to your personal space!', 'info');
-    };
-
-    // 将卡片添加到列表顶部
-    container.insertBefore(card, container.firstChild);
-
-    // 保存到本地存储，以便页面刷新后仍然显示
-    this.saveMyMemorySpaceToLocal();
-  }
-
-  generateMemoryPreview() {
-    // 显示最近上传的3个记忆的缩略图
-    const recentMemories = this.memories.slice(0, 3);
-    return recentMemories.map(memory => `
-      <div class="preview-thumbnail">
-        <img src="${memory.imageUrl}" alt="Memory preview" />
-      </div>
-    `).join('');
-  }
-
-  saveMyMemorySpaceToLocal() {
-    const mySpaceData = {
-      id: this.currentUser.id,
-      username: this.currentUser.username,
-      memorialText: 'MY MEMORY SPACE',
-      isPublic: true,
-      memoryCount: this.memories.length,
-      lastUpdated: new Date().toISOString()
-    };
-    localStorage.setItem('dreamGardenMySpace', JSON.stringify(mySpaceData));
-  }
-
-  saveMineGardenToLocal() {
-    const mineGardenData = {
-      id: this.currentUser.id,
-      username: this.currentUser.username,
-      gardenName: 'MINE',
-      isPublic: true,
-      created: new Date().toISOString()
-    };
-    localStorage.setItem('dreamGardenMine', JSON.stringify(mineGardenData));
-  }
-
-  loadMineGardenFromLocal() {
-    const mineGardenData = localStorage.getItem('dreamGardenMine');
-    if (mineGardenData) {
-      const data = JSON.parse(mineGardenData);
-      // 如果MINE花园数据存在，添加到公共空间显示
-      this.addMineGardenToPublic();
-    }
-  }
-
-  addMineGardenToPublic() {
-    // 检查是否已经存在MINE花园
-    const existingCard = document.querySelector('.mine-garden-card');
-    if (existingCard) {
-      return; // 已经存在，不重复添加
-    }
-
-    // 创建MINE花园卡片
-    const container = document.getElementById('public-memorials');
-    const card = document.createElement('div');
-    card.className = 'memorial-card mine-garden-card';
-    card.innerHTML = `
-      <h3>🌟 MINE</h3>
-      <p>Click to visit my personal memorial garden</p>
-    `;
-    
-    // 点击卡片切换到我的空间
-    card.onclick = () => {
-      this.switchPage('my-space');
-      this.showNotification('Welcome to your garden!', 'info');
-    };
-
-    // 将卡片添加到列表顶部
-    container.insertBefore(card, container.firstChild);
-  }
-
-  loadMyMemorySpaceFromLocal() {
-    const mySpaceData = localStorage.getItem('dreamGardenMySpace');
-    if (mySpaceData) {
-      const data = JSON.parse(mySpaceData);
-      // 如果我的空间数据存在，添加到公共空间显示
-      this.addMyMemorySpaceToPublic();
-    }
-  }
-
-  visitMemorial(memorialId) {
-    // 显示访客模态框
-    document.getElementById('visitor-modal').classList.add('show');
-    // 这里可以加载特定纪念馆的数据
-    this.showNotification(`Visiting ${memorialId}'s memorial...`, 'info');
-  }
-
-
-  async saveMemoryPosition(memoryId, x, y) {
-    try {
-      await fetch(`${this.apiBaseUrl}/memory/${memoryId}/position`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ x, y })
-      });
-    } catch (error) {
-      console.error('Save position error:', error);
-      // 离线模式：更新本地数据
-      const memories = JSON.parse(localStorage.getItem('dreamGardenMemories') || '[]');
-      const memoryIndex = memories.findIndex(m => m.id === memoryId);
-      if (memoryIndex !== -1) {
-        memories[memoryIndex].x = x;
-        memories[memoryIndex].y = y;
-        localStorage.setItem('dreamGardenMemories', JSON.stringify(memories));
-      }
-    }
-  }
-
-  loadUserData() {
-    // 自动创建匿名用户
-    this.currentUser = { id: `user_${Date.now()}`, username: 'Anonymous' };
-    this.loadMemories();
-  }
-
-  showNotification(message, type = 'info') {
-    // 创建通知元素
-    const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
-    notification.textContent = message;
-    notification.style.cssText = `
-      position: fixed;
-      top: 100px;
-      right: 20px;
-      background: ${type === 'success' ? '#A8E6CF' : type === 'error' ? '#FFCCBC' : '#BBDEFB'};
-      color: #607D8B;
-      padding: 10px 15px;
-      border: 2px solid #607D8B;
-      font-family: 'Press Start 2P', monospace;
-      font-size: 8px;
-      z-index: 3000;
-      animation: slideIn 0.3s ease;
-    `;
-
-    document.body.appendChild(notification);
-
-    // 3秒后自动移除
-    setTimeout(() => {
-      notification.style.animation = 'slideOut 0.3s ease';
-      setTimeout(() => {
-        if (notification.parentNode) {
-          notification.parentNode.removeChild(notification);
-        }
-      }, 300);
-    }, 3000);
-  }
-
-  // 添加CSS动画
-  addNotificationStyles() {
-    if (!document.getElementById('notification-styles')) {
-      const style = document.createElement('style');
-      style.id = 'notification-styles';
-      style.textContent = `
-        @keyframes slideIn {
-          from { transform: translateX(100%); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-        
-        @keyframes slideOut {
-          from { transform: translateX(0); opacity: 1; }
-          to { transform: translateX(100%); opacity: 0; }
-        }
-        
-        @keyframes floating {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-10px); }
-        }
-        
-        .drag-over {
-          background: rgba(187, 222, 251, 0.3) !important;
-          border: 2px dashed #BBDEFB !important;
-        }
-        
-        .memory-placed {
-          position: absolute;
-          cursor: grab;
-          z-index: 10;
-          transition: transform 0.2s ease;
-        }
-        
-        .memory-placed:hover {
-          transform: scale(1.05);
-          z-index: 20;
-          animation-play-state: paused;
-        }
-        
-        .memory-placed:active {
-          cursor: grabbing;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  }
-
-  // 信封相关方法
-  openLetterInterface() {
-    const modal = document.getElementById('letter-modal');
-    const textarea = document.getElementById('letter-content');
-    const saveBtn = document.getElementById('save-letter');
-    const cancelBtn = document.getElementById('cancel-letter');
-    const unlockTime = document.getElementById('unlock-time');
-    
-    // 清空文本区域
-    textarea.value = '';
-    textarea.readOnly = false;
-    
-    // 重置时间胶囊设置
-    unlockTime.value = '';
-    // 设置默认解封时间为1小时后
-    const now = new Date();
-    now.setHours(now.getHours() + 1);
-    unlockTime.value = now.toISOString().slice(0, 16);
-    
-    // 重置按钮状态
-    saveBtn.textContent = '💾 Save Letter';
-    cancelBtn.textContent = '❌ Cancel';
-    
-    // 清除编辑状态
-    delete modal.dataset.editingLetterId;
-    
-    // 显示模态框
-    modal.classList.add('show');
-    
-    // 聚焦到文本区域
-    setTimeout(() => {
-      textarea.focus();
-    }, 100);
-  }
-
-  saveLetter() {
-    const modal = document.getElementById('letter-modal');
-    const textarea = document.getElementById('letter-content');
-    const content = textarea.value.trim();
-    
-    if (!content) {
-      this.showNotification('Please write something in your letter!', 'warning');
-      return;
-    }
-    
-    // 检查时间胶囊设置
-    const unlockTime = document.getElementById('unlock-time').value;
-    let timeCapsuleData = null;
-    
-    // 如果填写了解封时间，则创建时间胶囊数据
-    if (unlockTime) {
-      const unlockDateTime = new Date(unlockTime);
-      const now = new Date();
-      
-      if (unlockDateTime <= now) {
-        this.showNotification('Unlock time must be in the future!', 'warning');
-        return;
-      }
-      
-      timeCapsuleData = {
-        unlockTime: unlockDateTime,
-        content: content,
-        isTimeCapsule: true
-      };
-    }
-    
-    // 检查是否在编辑现有信件
-    const editingLetterId = modal.dataset.editingLetterId;
-    if (editingLetterId) {
-      // 更新现有信件
-      this.updateLetter(editingLetterId, content, timeCapsuleData);
-      this.closeModal(modal);
-      // 清除编辑状态
-      delete modal.dataset.editingLetterId;
-    } else {
-      // 创建新信件
-      const letterId = `letter_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const x = Math.random() * (window.innerWidth - 200) + 100;
-      const y = Math.random() * (window.innerHeight - 300) + 100;
-      
-      this.placeLetter(x, y, content, letterId, timeCapsuleData);
-      
-      // 关闭模态框
-      this.closeModal(modal);
-      
-      if (timeCapsuleData) {
-        this.scheduleTimeCapsule(timeCapsuleData);
-        this.showNotification('Time capsule letter created!', 'success');
-      } else {
-        this.showNotification('Letter saved!', 'success');
-      }
-    }
-  }
-
-  placeLetter(x, y, content, letterId, timeCapsuleData = null) {
-    // 创建信封元素
-    const letter = document.createElement('div');
-    letter.className = 'letter-placed';
-    letter.dataset.letterId = letterId;
-    letter.style.left = `${x - 54}px`; // 54是信封宽度的一半
-    letter.style.top = `${y - 54}px`; // 54是信封高度的一半
-    
-    // 创建信封图片
-    const letterImg = document.createElement('img');
-    letterImg.src = 'envelope.png';
-    letterImg.alt = 'Envelope';
-    letterImg.style.width = '100%';
-    letterImg.style.height = '100%';
-    letterImg.style.objectFit = 'contain';
-    letterImg.style.imageRendering = 'pixelated';
-    letterImg.style.imageRendering = 'crisp-edges';
-    
-    // 如果图片加载失败，使用emoji作为后备
-    letterImg.onerror = () => {
-      letterImg.style.display = 'none';
-      letter.innerHTML = '✉️';
-      letter.style.fontSize = '48px';
-      letter.style.display = 'flex';
-      letter.style.alignItems = 'center';
-      letter.style.justifyContent = 'center';
-    };
-    
-    letter.appendChild(letterImg);
-    
-    // 添加点击事件来查看信纸内容
-    letter.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.viewLetter(letterId);
-    });
-    
-    // 添加拖拽功能
-    this.setupDrag(letter, 'letter', letterId);
-    
-    // 添加到场景
-    document.getElementById('itemarea').appendChild(letter);
-    
-    // 保存信纸数据
-    this.letters.push({
-      id: letterId,
-      x: x,
-      y: y,
-      content: content,
-      element: letter,
-      timeCapsuleData: timeCapsuleData
-    });
-  }
-
-  viewLetter(letterId) {
-    const letter = this.letters.find(l => l.id === letterId);
-    if (letter) {
-      // 检查时间胶囊是否已解封
-      if (letter.timeCapsuleData) {
-        const now = new Date();
-        const unlockTime = new Date(letter.timeCapsuleData.unlockTime);
-        
-        if (now < unlockTime) {
-          // 时间胶囊未解封，显示解封时间提示
-          const timeRemaining = unlockTime.getTime() - now.getTime();
-          const days = Math.floor(timeRemaining / (1000 * 60 * 60 * 24));
-          const hours = Math.floor((timeRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const minutes = Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60));
-          
-          let timeText = '';
-          if (days > 0) {
-            timeText = `${days} day${days > 1 ? 's' : ''} ${hours} hour${hours > 1 ? 's' : ''}`;
-          } else if (hours > 0) {
-            timeText = `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minute${minutes > 1 ? 's' : ''}`;
-          } else {
-            timeText = `${minutes} minute${minutes > 1 ? 's' : ''}`;
-          }
-          
-          this.showNotification(`Letter will unlock in: ${timeText}`, 'info');
-          return;
-        }
-      }
-      
-      // 打开信纸界面查看内容
-      const modal = document.getElementById('letter-modal');
-      const textarea = document.getElementById('letter-content');
-      const unlockTimeInput = document.getElementById('unlock-time');
-      
-      // 显示信件内容（只读模式）
-      textarea.value = letter.content;
-      textarea.readOnly = true;
-      
-      // 显示时间胶囊设置（如果有）
-      if (letter.timeCapsuleData) {
-        unlockTimeInput.value = letter.timeCapsuleData.unlockTime.toISOString().slice(0, 16);
-      } else {
-        unlockTimeInput.value = '';
-      }
-      
-      // 修改按钮文本
-      const saveBtn = document.getElementById('save-letter');
-      const cancelBtn = document.getElementById('cancel-letter');
-      saveBtn.textContent = '✏️ Edit Letter';
-      cancelBtn.textContent = '❌ Close';
-      
-      // 存储当前编辑的信件ID
-      modal.dataset.editingLetterId = letterId;
-      
-      // 移除之前的事件监听器并添加新的事件监听器
-      saveBtn.replaceWith(saveBtn.cloneNode(true));
-      const newSaveBtn = document.getElementById('save-letter');
-      
-      newSaveBtn.addEventListener('click', () => {
-        if (textarea.readOnly) {
-          // 进入编辑模式
-          textarea.readOnly = false;
-          textarea.focus();
-          newSaveBtn.textContent = '💾 Save Changes';
-          cancelBtn.textContent = '❌ Cancel';
-        } else {
-          // 保存修改
-          const unlockTime = document.getElementById('unlock-time').value;
-          let timeCapsuleData = null;
-          
-          if (unlockTime) {
-            const unlockDateTime = new Date(unlockTime);
-            timeCapsuleData = {
-              unlockTime: unlockDateTime,
-              content: textarea.value.trim(),
-              isTimeCapsule: true
-            };
-          }
-          
-          this.updateLetter(letterId, textarea.value.trim(), timeCapsuleData);
-          this.closeModal(modal);
-          // 重置按钮状态
-          newSaveBtn.textContent = '✏️ Edit Letter';
-          cancelBtn.textContent = '❌ Close';
-          textarea.readOnly = true;
-        }
-      });
-      
-      // 显示模态框
-      modal.classList.add('show');
-      
-      // 聚焦到文本区域
-      setTimeout(() => {
-        textarea.focus();
-      }, 100);
-    }
-  }
-
-  updateLetter(letterId, newContent, timeCapsuleData = null) {
-    const letter = this.letters.find(l => l.id === letterId);
-    if (letter) {
-      // 更新信件内容
-      letter.content = newContent;
-      letter.timeCapsuleData = timeCapsuleData;
-      
-      // 显示成功消息
-      this.showNotification('信件已更新!', 'success');
-      
-      if (timeCapsuleData) {
-        this.scheduleTimeCapsule(timeCapsuleData);
-      }
-    }
-  }
-
-  deleteItem(type, id) {
-    if (type === 'candle') {
-      this.removeCandle(id);
-    } else if (type === 'flower') {
-      this.removeFlower(id);
-    } else if (type === 'letter') {
-      this.removeLetter(id);
-    } else if (type === 'memory') {
-      this.removeMemory(id);
-    }
-  }
-
-  removeLetter(letterId) {
-    const letter = this.letters.find(l => l.id === letterId);
-    if (letter) {
-      // 从DOM中移除
-      letter.element.remove();
-      
-      // 从数组中移除
-      this.letters = this.letters.filter(l => l.id !== letterId);
-      
-      this.showNotification('Letter removed', 'info');
-    }
-  }
-
-  removeMemory(memoryId) {
-    const memory = this.memories.find(m => m.id === memoryId);
-    if (memory) {
-      // 清理生命值衰减间隔
-      if (memory.decayInterval) {
-        clearInterval(memory.decayInterval);
-      }
-      
-      // 从DOM中移除
-      memory.element.remove();
-      
-      // 从数组中移除
-      this.memories = this.memories.filter(m => m.id !== memoryId);
-      
-      // 保存到本地存储
-      this.saveMemoriesToLocal();
-      
-      this.showNotification('Memory removed', 'info');
-    }
-  }
-
-  // 雕刻相关方法
-  showTombstoneCanvas() {
-    const tombstoneCanvas = document.getElementById('tombstone-canvas');
-    const canvas = document.getElementById('carving-canvas');
-    
-    tombstoneCanvas.classList.add('active');
-    
-    // 初始化画布
-    this.carvingCanvas = canvas;
-    this.carvingCtx = canvas.getContext('2d');
-    
-    // 设置像素化渲染，确保像素清晰
-    this.carvingCtx.imageSmoothingEnabled = false;
-    this.carvingCtx.webkitImageSmoothingEnabled = false;
-    this.carvingCtx.mozImageSmoothingEnabled = false;
-    this.carvingCtx.msImageSmoothingEnabled = false;
-    
-    // 设置画布尺寸，使用像素化渲染
-    canvas.width = 300;
-    canvas.height = 400;
-    canvas.style.width = '300px';
-    canvas.style.height = '400px';
-    
-    // 画布保持透明，不填充背景
-    
-    // 初始化雕刻历史记录
-    this.carvingHistory = [];
-    this.saveCarvingState(); // 保存初始空白状态
-    
-    // 添加雕刻事件监听器
-    this.setupCarvingEvents();
-  }
-
-  hideTombstoneCanvas() {
-    const tombstoneCanvas = document.getElementById('tombstone-canvas');
-    tombstoneCanvas.classList.remove('active');
-    
-    // 移除雕刻事件监听器
-    this.removeCarvingEvents();
-  }
-
-  // 显示撤回按钮
-  showUndoButton() {
-    const trashBin = document.getElementById('trash-bin');
-    if (trashBin) {
-      trashBin.innerHTML = '↶';
-      trashBin.title = '撤回雕刻 (Undo Carving)';
-      trashBin.classList.add('undo-button');
-      trashBin.style.display = 'block';
-      
-      // 添加撤回按钮点击事件
-      trashBin.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.undoCarving();
-      };
-    }
-  }
-
-  // 隐藏撤回按钮，恢复垃圾桶
-  hideUndoButton() {
-    const trashBin = document.getElementById('trash-bin');
-    if (trashBin) {
-      trashBin.innerHTML = '🗑️';
-      trashBin.title = '拖拽物品到此处删除';
-      trashBin.classList.remove('undo-button');
-      trashBin.onclick = null; // 移除撤回按钮的点击事件
-    }
-  }
-
-  setupCarvingEvents() {
-    const canvas = this.carvingCanvas;
-    
-    canvas.addEventListener('mousedown', (e) => {
-      this.isCarving = true;
-      // 在开始雕刻前保存当前状态
-      this.saveCarvingState();
-      this.startCarving(e);
-    });
-    
-    canvas.addEventListener('mousemove', (e) => {
-      if (this.isCarving) {
-        this.continueCarving(e);
-      }
-    });
-    
-    canvas.addEventListener('mouseup', () => {
-      if (this.isCarving) {
-        this.isCarving = false;
-      }
-    });
-    
-    canvas.addEventListener('mouseleave', () => {
-      if (this.isCarving) {
-        this.isCarving = false;
-      }
-    });
-  }
-
-  removeCarvingEvents() {
-    const canvas = this.carvingCanvas;
-    if (canvas) {
-      canvas.removeEventListener('mousedown', this.startCarving);
-      canvas.removeEventListener('mousemove', this.continueCarving);
-      canvas.removeEventListener('mouseup', this.stopCarving);
-      canvas.removeEventListener('mouseleave', this.stopCarving);
-    }
-  }
-
-  startCarving(e) {
-    const rect = this.carvingCanvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) * (300 / rect.width));
-    const y = Math.floor((e.clientY - rect.top) * (400 / rect.height));
-    
-    this.carvePixel(x, y);
-  }
-
-  continueCarving(e) {
-    const rect = this.carvingCanvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) * (300 / rect.width));
-    const y = Math.floor((e.clientY - rect.top) * (400 / rect.height));
-    
-    this.carvePixel(x, y);
-  }
-
-  carvePixel(x, y) {
-    if (!this.carvingCtx) return;
-    
-    // 确保坐标在画布范围内（使用实际画布尺寸）
-    const canvasWidth = 300;
-    const canvasHeight = 400;
-    if (x < 0 || x >= canvasWidth || y < 0 || y >= canvasHeight) {
-      return;
-    }
-    
-    // 创建密集的像素雕刻效果，模拟凹陷感
-    this.drawCarvingPixels(x, y);
-  }
-
-  drawCarvingPixels(x, y) {
-    // 绘制7x7像素块，让雕刻更密集
-    for (let dx = -3; dx <= 3; dx++) {
-      for (let dy = -3; dy <= 3; dy++) {
-        const pixelX = x + dx;
-        const pixelY = y + dy;
-        
-        // 确保像素在画布范围内
-        if (pixelX >= 0 && pixelX < 300 && 
-            pixelY >= 0 && pixelY < 400) {
-          
-          // 计算距离中心的距离，用于颜色渐变
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          
-          // 根据距离确定颜色，营造凹陷感
-          if (distance <= 2) {
-            // 中心区域：最深的凹陷色
-            this.carvingCtx.fillStyle = '#000000';
-          } else if (distance <= 3.5) {
-            // 中间区域：中等深度
-            this.carvingCtx.fillStyle = '#444444';
-          } else {
-            // 边缘区域：较浅的阴影
-            this.carvingCtx.fillStyle = '#888888';
-          }
-          
-          // 绘制1x1像素，让像素更密集
-          this.carvingCtx.fillRect(pixelX, pixelY, 1, 1);
-        }
-      }
-    }
-    
-    // 添加更多随机像素来增加密度
-    if (Math.random() < 0.5) {
-      const randomX = x + Math.floor(Math.random() * 7) - 3;
-      const randomY = y + Math.floor(Math.random() * 7) - 3;
-      
-      if (randomX >= 0 && randomX < 300 && 
-          randomY >= 0 && randomY < 400) {
-        this.carvingCtx.fillStyle = '#444444';
-        this.carvingCtx.fillRect(randomX, randomY, 1, 1);
-      }
-    }
-  }
-
-
-  // 撤销雕刻功能
-  undoCarving() {
-    if (this.carvingHistory.length <= 1) {
-      this.showNotification('没有可撤销的雕刻', 'info');
-      return;
-    }
-    
-    // 移除当前状态，恢复到上一个状态
-    this.carvingHistory.pop(); // 移除当前状态
-    const previousState = this.carvingHistory[this.carvingHistory.length - 1]; // 获取上一个状态
-    
-    // 清空画布
-    this.carvingCtx.clearRect(0, 0, 300, 400);
-    
-    // 重新绘制到上一个状态
-    if (previousState) {
-      this.carvingCtx.putImageData(previousState, 0, 0);
-    }
-    
-    this.showNotification('撤销成功', 'success');
-  }
-
-// 保存雕刻状态到历史记录
-  saveCarvingState() {
-    if (this.carvingCanvas && this.carvingCtx) {
-      const imageData = this.carvingCtx.getImageData(0, 0, this.carvingCanvas.width, this.carvingCanvas.height);
-      this.carvingHistory.push(imageData);
-      
-      // 限制历史记录数量，避免内存过多占用
-      if (this.carvingHistory.length > 20) {
-        this.carvingHistory.shift();
-      }
-    }
-  }
-
-  // 时间胶囊调度功能
-  scheduleTimeCapsule(timeCapsuleData) {
-    const now = new Date();
-    const delay = timeCapsuleData.unlockTime.getTime() - now.getTime();
-    
-    if (delay > 0) {
-      // 使用setTimeout调度时间胶囊解封
-      setTimeout(() => {
-        this.unlockTimeCapsule(timeCapsuleData);
-      }, delay);
-      
-      // 保存调度信息到本地存储
-      const scheduledTimeCapsules = JSON.parse(localStorage.getItem('scheduledTimeCapsules') || '[]');
-      scheduledTimeCapsules.push({
-        id: `timeCapsule_${Date.now()}`,
-        ...timeCapsuleData,
-        scheduledAt: now.toISOString()
-      });
-      localStorage.setItem('scheduledTimeCapsules', JSON.stringify(scheduledTimeCapsules));
-      
-      this.showNotification(`Letter will unlock at ${timeCapsuleData.unlockTime.toLocaleString()}`, 'info');
-    } else {
-      this.showNotification('解封时间必须是未来时间!', 'warning');
-    }
-  }
-
-  unlockTimeCapsule(timeCapsuleData) {
-    // 时间胶囊解封
-    console.log('Unlocking time capsule:', timeCapsuleData);
-    
-    // 显示时间胶囊解封通知
-    this.showNotification(`💎 Letter unlocked! From your past self`, 'success');
-    
-    // 从本地存储中移除已解封的时间胶囊
-    const scheduledTimeCapsules = JSON.parse(localStorage.getItem('scheduledTimeCapsules') || '[]');
-    const updatedTimeCapsules = scheduledTimeCapsules.filter(capsule => 
-      capsule.unlockTime !== timeCapsuleData.unlockTime.toISOString()
-    );
-    localStorage.setItem('scheduledTimeCapsules', JSON.stringify(updatedTimeCapsules));
-    
-    // 可以在这里添加更多解封后的逻辑，比如显示特殊效果
-    this.showTimeCapsuleUnlockEffect();
-  }
-
-  // 检查并恢复页面刷新后的时间胶囊调度
-  restoreScheduledTimeCapsules() {
-    const scheduledTimeCapsules = JSON.parse(localStorage.getItem('scheduledTimeCapsules') || '[]');
-    const now = new Date();
-    
-    scheduledTimeCapsules.forEach(timeCapsuleData => {
-      const unlockTime = new Date(timeCapsuleData.unlockTime);
-      const delay = unlockTime.getTime() - now.getTime();
-      
-      if (delay > 0) {
-        setTimeout(() => {
-          this.unlockTimeCapsule(timeCapsuleData);
-        }, delay);
-      } else if (delay > -60000) { // 如果延迟在1分钟内，立即解封
-        this.unlockTimeCapsule(timeCapsuleData);
-      }
-    });
-  }
-
-  // 时间胶囊解封特效 - 信封动态光晕
-  showTimeCapsuleUnlockEffect() {
-    // 找到场景中的信封元素
-    const letters = document.querySelectorAll('.letter-placed');
-    if (letters.length === 0) return;
-    
-    // 为每个信封添加光晕效果
-    letters.forEach(letter => {
-      const envelope = letter.querySelector('.envelope');
-      if (envelope) {
-        envelope.classList.add('unlock-glow');
-        
-        // 3秒后移除光晕效果
-        setTimeout(() => {
-          envelope.classList.remove('unlock-glow');
-        }, 3000);
-      }
-    });
-    
-    // 添加光晕动画样式
-    if (!document.getElementById('envelope-glow-animation')) {
-      const style = document.createElement('style');
-      style.id = 'envelope-glow-animation';
-      style.textContent = `
-        @keyframes envelopeGlow {
-          0%, 100% { 
-            box-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
-          }
-          50% { 
-            box-shadow: 0 0 20px rgba(255, 215, 0, 0.8), 0 0 30px rgba(255, 215, 0, 0.6);
-          }
-        }
-        
-        .envelope.unlock-glow {
-          animation: envelopeGlow 1s ease-in-out infinite;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  }
-
-  // 墓碑文字编辑器相关方法
-  setupTombstoneTextEditor() {
-    // 延迟执行，确保DOM完全加载
-    setTimeout(() => {
-      const tombstoneTextArea = document.getElementById('tombstone-text');
-      if (!tombstoneTextArea) {
-        console.log('Tombstone text area not found!');
-        return;
-      }
-      console.log('Tombstone text area found and setting up...');
-
-      // 从本地存储加载已保存的文字
-      try {
-        const savedText = localStorage.getItem('dreamGardenTombstoneText');
-        if (savedText) {
-          this.tombstoneText = savedText;
-          tombstoneTextArea.value = savedText;
-        }
-      } catch (error) {
-        console.log('LocalStorage not available:', error);
-      }
-
-      // 确保文本框可以被编辑
-      tombstoneTextArea.disabled = false;
-      tombstoneTextArea.readOnly = false;
-      tombstoneTextArea.setAttribute('contenteditable', 'true');
-
-      // 监听文字变化
-      tombstoneTextArea.addEventListener('input', (e) => {
-        console.log('Text input detected:', e.target.value);
-        this.tombstoneText = e.target.value;
-        this.saveTombstoneText();
-      });
-
-      // 监听焦点事件
-      tombstoneTextArea.addEventListener('focus', () => {
-        console.log('Tombstone text focused');
-        if (this.showNotification) {
-          this.showNotification('Editing epitaph...', 'info');
-        }
-      });
-
-      tombstoneTextArea.addEventListener('blur', () => {
-        console.log('Tombstone text blurred');
-        if (this.tombstoneText && this.tombstoneText.trim()) {
-          if (this.showNotification) {
-            this.showNotification('Epitaph saved!', 'success');
-          }
-        }
-      });
-
-      // 添加点击事件确保可以聚焦
-      tombstoneTextArea.addEventListener('click', (e) => {
-        console.log('Tombstone text clicked');
-        e.preventDefault();
-        e.stopPropagation();
-        tombstoneTextArea.focus();
-      });
-
-      // 添加键盘事件
-      tombstoneTextArea.addEventListener('keydown', (e) => {
-        console.log('Key pressed:', e.key);
-        e.stopPropagation();
-      });
-
-    }, 100);
-  }
-
-  saveTombstoneText() {
-    try {
-      localStorage.setItem('dreamGardenTombstoneText', this.tombstoneText);
-    } catch (error) {
-      console.log('Cannot save to localStorage:', error);
-      // 如果localStorage不可用，可以尝试其他存储方式
-    }
-  }
-
-  getTombstoneText() {
-    return this.tombstoneText;
-  }
-
-  setTombstoneText(text) {
-    this.tombstoneText = text;
-    const tombstoneTextArea = document.getElementById('tombstone-text');
-    if (tombstoneTextArea) {
-      tombstoneTextArea.value = text;
-    }
-    this.saveTombstoneText();
-  }
-
+  
+  function isOverlapping(rect1, rect2) {
+  return !(rect1.right < rect2.left || rect1.left > rect2.right || 
+           rect1.bottom < rect2.top || rect1.top > rect2.bottom);
 }
 
-// 初始化应用
-document.addEventListener('DOMContentLoaded', () => {
-  console.log('DOM Content Loaded - Initializing Dream Garden Memorial...');
-  try {
-    const app = new DreamGardenMemorial();
-    console.log('Dream Garden Memorial app initialized successfully');
-    // 恢复时间胶囊调度
-    app.restoreScheduledTimeCapsules();
-    console.log('Time capsule scheduler restored');
+function placePiece(piece, target, pieceNum) {
+    placedFragments[pieceNum] = true;
     
-    // 额外的墓碑文本框初始化，确保在GitHub Pages上工作
-    setTimeout(() => {
-      const tombstoneText = document.getElementById('tombstone-text');
-      if (tombstoneText) {
-        tombstoneText.style.pointerEvents = 'auto';
-        tombstoneText.style.zIndex = '999';
-        console.log('Tombstone text extra initialization completed');
-      }
-    }, 500);
+    piece.style.position = 'absolute';
+    piece.style.left = target.style.left;
+    piece.style.top = target.style.top;
+    piece.style.cursor = 'default';
+    piece.style.zIndex = '9000';
+    piece.style.opacity = '1';
     
-  } catch (error) {
-    console.error('Error initializing Dream Garden Memorial:', error);
-  }
-});
-
-// 备用初始化，确保在GitHub Pages上工作
-window.addEventListener('load', () => {
-  setTimeout(() => {
-    const tombstoneText = document.getElementById('tombstone-text');
-    if (tombstoneText && !tombstoneText.hasAttribute('data-initialized')) {
-      tombstoneText.setAttribute('data-initialized', 'true');
-      tombstoneText.disabled = false;
-      tombstoneText.readOnly = false;
-      console.log('Tombstone text backup initialization completed');
+    target.style.display = 'none';
+    
+    if (Object.keys(placedFragments).length === 9) {
+      completeLetterPuzzle();
     }
-  }, 1000);
-});
+  }
+  
+  function completeLetterPuzzle() {
+    gameState.letterRepaired = true;
+  gameState.gamePhase = 4;
+  updateArchive('信件残片', '已修复。看起来是一封信...');
+    
+    letterDocument.innerHTML = '';
+    
+    const img = document.createElement('img');
+    img.src = 'letter-complete.png';
+    img.style.cssText = `
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    `;
+    letterDocument.appendChild(img);
+  
+  resetAllTools();
+  
+  const closeLetter = (e) => {
+    if (e.target.id === 'game-container') {
+      fadeOutRemove(letterDocument, () => {
+        letterDocument = null;
+        placedFragments = {};
+        resetAllTools();
+        switchBackgroundToOriginal();
+        setTimeout(() => {
+        booksIcon.style.display = 'block';
+        setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+        }, 1700);
+      });
+      $('game-container').removeEventListener('click', closeLetter);
+    }
+  };
+  $('game-container').addEventListener('click', closeLetter);
+}
 
-// HP衰减系统（模拟）
-setInterval(() => {
-  document.querySelectorAll('.memory-module').forEach(module => {
-    const hpFill = module.querySelector('.hp-fill');
-    if (hpFill) {
-      const currentHp = parseInt(hpFill.style.width) || 100;
-      const newHp = Math.max(0, currentHp - 1);
-      hpFill.style.width = `${newHp}%`;
-      
-      // 更新颜色
-      hpFill.className = 'hp-fill';
-      if (newHp > 70) {
-        hpFill.classList.add('high');
-      } else if (newHp > 30) {
-        hpFill.classList.add('medium');
-    } else {
-        hpFill.classList.add('low');
+// ===== 第三关：图片切换 =====
+
+function startImageSwitchingPhase() {
+  gameState.gamePhase = 5;
+  imageClickCount = 1;
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    showSwitchingImage('1.png');
+  }, 1700);
+}
+
+function showSwitchingImage(imageSrc) {
+  if (!switchingImage) {
+    switchingImage = document.createElement('div');
+    switchingImage.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 500px;
+      height: 500px;
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.5s ease-in;
+    `;
+    workspace.appendChild(switchingImage);
+    switchingImage.addEventListener('click', handleImageClick);
+  }
+  
+  switchingImage.style.backgroundImage = `url('${imageSrc}')`;
+  setTimeout(() => switchingImage.style.opacity = '1', 100);
+}
+
+function handleImageClick(e) {
+  e.stopPropagation();
+  if (imageClickCount === 1) {
+    imageClickCount = 2;
+    switchingImage.style.opacity = '0';
+    setTimeout(() => showSwitchingImage('2.png'), 500);
+  } else if (imageClickCount === 2) {
+    switchingImage.remove();
+    switchingImage = null;
+    createOverlappingImages();
+  }
+}
+
+function createOverlappingImages() {
+  gameState.gamePhase = 6;
+  
+  image3Others = createImage('3others.png', '45%', '500px', '500', true);
+  image3Lukas = createImage('3Lukas.png', '55%', '500px', '502', false);
+  
+  passOthers = createPassIcon('501', true);
+  passLukas = createPassIcon('503', false);
+  
+  workspace.append(image3Others, image3Lukas, passOthers, passLukas);
+    
+    setTimeout(() => {
+    [image3Others, image3Lukas, passOthers, passLukas].forEach(el => el.style.opacity = '1');
+  }, 100);
+  
+  const closeImages = (e) => {
+    if (e.target.id === 'game-container' || e.target.id === 'workspace') {
+      // 必须先用tweezers收集stamp才能关闭
+      if (!gameState.passCollected) {
+        const warning = createDialog('Maybe you can do something...', {
+          width: '400px',
+          height: '150px',
+          position: 'right',
+          parent: document.body
+        });
+        warning.addEventListener('click', (e) => {
+          e.stopPropagation();
+          warning.remove();
+        });
+        autoRemoveDialog(warning, 3000);
+        return;
       }
+      
+      closeOverlappingImages();
+      $('game-container').removeEventListener('click', closeImages);
+    }
+  };
+  $('game-container').addEventListener('click', closeImages);
+}
+
+function createImage(src, left, width, zIndex, clickable) {
+  const img = document.createElement('div');
+  img.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: ${left};
+    transform: translate(-50%, -50%);
+    width: ${width};
+    height: ${width};
+    background-image: url('${src}');
+    background-size: contain;
+    background-repeat: no-repeat;
+    cursor: ${clickable ? 'pointer' : 'default'};
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    z-index: ${zIndex};
+    pointer-events: ${clickable ? 'auto' : 'none'};
+  `;
+  if (clickable) img.addEventListener('click', swapImageLayers);
+  return img;
+}
+
+function createPassIcon(zIndex, isOthers) {
+  const passContainer = document.createElement('div');
+  passContainer.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: ${isOthers ? '45%' : '55%'};
+    transform: translate(-50%, -50%);
+    width: 500px;
+    height: 500px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    z-index: ${zIndex};
+  `;
+  
+  const passImg = document.createElement('img');
+  passImg.src = 'pass.png';
+  passImg.style.cssText = `
+    position: absolute;
+    width: 150px;
+    height: 150px;
+    bottom: 30px;
+    right: 50px;
+    ${isOthers ? 'pointer-events: auto; cursor: pointer;' : ''}
+  `;
+  
+  if (isOthers) {
+    passImg.classList.add('glow-effect');
+    passImg.addEventListener('click', collectPass);
+  }
+  
+  passContainer.appendChild(passImg);
+  return passContainer;
+}
+
+function swapImageLayers(e) {
+  if (e) e.stopPropagation();
+  
+  const othersZ = parseInt(image3Others.style.zIndex);
+  const lukasZ = parseInt(image3Lukas.style.zIndex);
+  
+  if (othersZ < lukasZ) {
+    image3Others.style.zIndex = '502';
+    image3Lukas.style.zIndex = '500';
+    passOthers.style.zIndex = '503';
+    passLukas.style.zIndex = '501';
+    
+    image3Others.removeEventListener('click', swapImageLayers);
+    image3Others.style.cursor = 'default';
+    image3Others.style.pointerEvents = 'none';
+    image3Lukas.style.cursor = 'pointer';
+    image3Lukas.style.pointerEvents = 'auto';
+    image3Lukas.addEventListener('click', swapImageLayers);
+  } else {
+    image3Others.style.zIndex = '500';
+    image3Lukas.style.zIndex = '502';
+    passOthers.style.zIndex = '501';
+    passLukas.style.zIndex = '503';
+    
+    image3Lukas.removeEventListener('click', swapImageLayers);
+    image3Lukas.style.cursor = 'default';
+    image3Lukas.style.pointerEvents = 'none';
+    image3Others.style.cursor = 'pointer';
+    image3Others.style.pointerEvents = 'auto';
+    image3Others.addEventListener('click', swapImageLayers);
+  }
+}
+
+function collectPass(e) {
+  if (!gameState.isTweezersActive || gameState.passCollected) return;
+  e.stopPropagation();
+  
+  gameState.passCollected = true;
+  fadeOutRemove(passOthers);
+  
+  const dialog = createDialog('You got a <span style="color: #d32f2f;">stamp</span>!');
+  dialog.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dialog.remove();
+  });
+  autoRemoveDialog(dialog);
+  
+  passSlot.style.display = 'block';
+  passSlot.addEventListener('click', () => selectTool('pass'));
+}
+
+function closeOverlappingImages() {
+  gameState.gamePhase = 6;
+  [image3Others, image3Lukas, passOthers, passLukas].forEach(el => fadeOutRemove(el));
+  
+  resetAllTools();
+  switchBackgroundToOriginal();
+  setTimeout(() => {
+  booksIcon.style.display = 'block';
+  setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+  }, 1700);
+}
+
+// ===== 第四关：Amelie Diary =====
+
+function showAmelieDiary() {
+  gameState.gamePhase = 7;
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    
+    amelieDiaryDocument = document.createElement('div');
+    amelieDiaryDocument.id = 'amelie-diary-document';
+    amelieDiaryDocument.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 800px;
+      height: 800px;
+      opacity: 0;
+      transition: opacity 0.5s ease-in;
+      z-index: 500;
+    `;
+    
+    amelieDiaryClear = document.createElement('img');
+    amelieDiaryClear.src = 'Amelie diary.png';
+    amelieDiaryClear.style.cssText = `
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    `;
+    
+    amelieDiaryBlurred = document.createElement('img');
+    amelieDiaryBlurred.src = 'Amelie diary.png';
+    amelieDiaryBlurred.style.cssText = `
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      filter: blur(8px);
+      pointer-events: none;
+    `;
+    
+    amelieDiaryDocument.append(amelieDiaryClear, amelieDiaryBlurred);
+    workspace.appendChild(amelieDiaryDocument);
+    
+    amelieDiaryDocument.addEventListener('mousemove', handleMagnifierMove);
+    amelieDiaryDocument.addEventListener('mouseleave', handleMagnifierLeave);
+    
+    setTimeout(() => amelieDiaryDocument.style.opacity = '1', 100);
+    
+    const closeDiary = (e) => {
+      if (e.target.id === 'game-container') {
+        gameState.gamePhase = 8;
+        fadeOutRemove(amelieDiaryDocument, () => {
+          amelieDiaryDocument.removeEventListener('mousemove', handleMagnifierMove);
+          amelieDiaryDocument.removeEventListener('mouseleave', handleMagnifierLeave);
+          amelieDiaryDocument = amelieDiaryClear = amelieDiaryBlurred = null;
+          resetAllTools();
+          switchBackgroundToOriginal();
+          setTimeout(() => {
+          booksIcon.style.display = 'block';
+          setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+          }, 1700);
+        });
+        $('game-container').removeEventListener('click', closeDiary);
+      }
+    };
+    $('game-container').addEventListener('click', closeDiary);
+  }, 1700);
+}
+
+function handleMagnifierMove(e) {
+  if (!amelieDiaryBlurred || !gameState.isMagnifierActive) {
+    if (amelieDiaryBlurred) {
+      amelieDiaryBlurred.style.maskImage = 'none';
+      amelieDiaryBlurred.style.webkitMaskImage = 'none';
+    }
+    return;
+  }
+  
+  const rect = amelieDiaryDocument.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const radius = 100;
+  const maskValue = `radial-gradient(circle ${radius}px at ${x}px ${y}px, transparent 0, transparent ${radius}px, black ${radius + 20}px, black 100%)`;
+  
+  amelieDiaryBlurred.style.maskImage = maskValue;
+  amelieDiaryBlurred.style.webkitMaskImage = maskValue;
+}
+
+function handleMagnifierLeave() {
+  if (amelieDiaryBlurred) {
+    amelieDiaryBlurred.style.maskImage = 'none';
+    amelieDiaryBlurred.style.webkitMaskImage = 'none';
+  }
+}
+
+// ===== 第五关：News =====
+
+function startNewsPhase() {
+  gameState.gamePhase = 9;
+  newsImageClickCount = 1;
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    showNewsSwitchingImage('1.png');
+  }, 1700);
+}
+
+function showNewsSwitchingImage(imageSrc) {
+  if (!newsSwitchingImage) {
+    newsSwitchingImage = document.createElement('div');
+    newsSwitchingImage.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 500px;
+      height: 500px;
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.5s ease-in;
+    `;
+    workspace.appendChild(newsSwitchingImage);
+    newsSwitchingImage.addEventListener('click', handleNewsImageClick);
+  }
+  
+  newsSwitchingImage.style.backgroundImage = `url('${imageSrc}')`;
+  setTimeout(() => newsSwitchingImage.style.opacity = '1', 100);
+}
+
+function handleNewsImageClick(e) {
+  e.stopPropagation();
+  if (newsImageClickCount === 1) {
+    newsImageClickCount = 2;
+    newsSwitchingImage.style.opacity = '0';
+    setTimeout(() => showNewsSwitchingImage('2.png'), 500);
+  } else if (newsImageClickCount === 2) {
+    newsSwitchingImage.remove();
+    newsSwitchingImage = null;
+    createNewsOverlappingImages();
+  }
+}
+
+function createNewsOverlappingImages() {
+  gameState.gamePhase = 10;
+  
+  // 创建 explode.png（底层，初始可点击）
+  explodeImage = document.createElement('div');
+  explodeImage.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 45%;
+    transform: translate(-50%, -50%);
+    width: 500px;
+    height: 500px;
+    background-image: url('explode.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    z-index: 500;
+    pointer-events: auto;
+  `;
+  explodeImage._clickHandler = createNewsClickHandler();
+  explodeImage.addEventListener('click', explodeImage._clickHandler);
+  
+  // 创建 news.png 清晰层（上层，初始不可点击）
+  newsImageClear = document.createElement('div');
+  newsImageClear.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 55%;
+    transform: translate(-50%, -50%);
+    width: 800px;
+    height: 800px;
+    background-image: url('news.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    cursor: default;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    z-index: 502;
+    pointer-events: none;
+  `;
+  
+  // 创建 news.png 模糊层（最上层）
+  newsImageBlurred = document.createElement('div');
+  newsImageBlurred.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 55%;
+    transform: translate(-50%, -50%);
+    width: 800px;
+    height: 800px;
+    background-image: url('news.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    filter: blur(8px);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    z-index: 503;
+  `;
+  
+  workspace.append(explodeImage, newsImageClear, newsImageBlurred);
+  
+  setTimeout(() => {
+    explodeImage.style.opacity = '1';
+    newsImageClear.style.opacity = '1';
+    newsImageBlurred.style.opacity = '1';
+  }, 100);
+  
+  workspace.addEventListener('mousemove', handleNewsOverlappingMagnifier);
+  workspace.addEventListener('mouseleave', handleNewsOverlappingMagnifierLeave);
+  
+  const closeNews = (e) => {
+    if (e.target.id === 'game-container' || e.target.id === 'workspace') {
+      // 必须先盖章才能关闭
+      const placedPasses = document.querySelectorAll('.placed-pass');
+      if (placedPasses.length === 0) {
+        const warning = createDialog('Maybe you can do something...', {
+          width: '400px',
+          height: '150px',
+          position: 'right',
+          parent: document.body
+        });
+        warning.addEventListener('click', (e) => {
+          e.stopPropagation();
+          warning.remove();
+        });
+        autoRemoveDialog(warning, 3000);
+        return;
+      }
+      
+      closeNewsOverlapping();
+      $('game-container').removeEventListener('click', closeNews);
+    }
+  };
+  $('game-container').addEventListener('click', closeNews);
+}
+
+function createNewsClickHandler() {
+  return (e) => {
+    if (gameState.isPassActive && gameState.passCollected) {
+      e.stopPropagation();
+      placePassStamp(e);
+      return;
+    }
+    swapNewsLayers(e);
+  };
+}
+
+function swapNewsLayers(e) {
+  if (e) e.stopPropagation();
+  
+  const explodeZ = parseInt(explodeImage.style.zIndex);
+  const newsZ = parseInt(newsImageClear.style.zIndex);
+  
+  if (explodeZ < newsZ) {
+    explodeImage.style.zIndex = '502';
+    newsImageClear.style.zIndex = '500';
+    newsImageBlurred.style.zIndex = '501';
+    
+    explodeImage.removeEventListener('click', explodeImage._clickHandler);
+    explodeImage.style.cursor = 'default';
+    explodeImage.style.pointerEvents = 'none';
+    
+    newsImageClear.style.cursor = 'pointer';
+    newsImageClear.style.pointerEvents = 'auto';
+    newsImageClear._clickHandler = createNewsClickHandler();
+    newsImageClear.addEventListener('click', newsImageClear._clickHandler);
+  } else {
+    explodeImage.style.zIndex = '500';
+    newsImageClear.style.zIndex = '502';
+    newsImageBlurred.style.zIndex = '503';
+    
+    newsImageClear.removeEventListener('click', newsImageClear._clickHandler);
+    newsImageClear.style.cursor = 'default';
+    newsImageClear.style.pointerEvents = 'none';
+    
+    explodeImage.style.cursor = 'pointer';
+    explodeImage.style.pointerEvents = 'auto';
+    explodeImage._clickHandler = createNewsClickHandler();
+    explodeImage.addEventListener('click', explodeImage._clickHandler);
+  }
+}
+
+function handleNewsOverlappingMagnifier(e) {
+  if (!newsImageBlurred || !gameState.isMagnifierActive) {
+    if (newsImageBlurred) {
+      newsImageBlurred.style.maskImage = 'none';
+      newsImageBlurred.style.webkitMaskImage = 'none';
+    }
+    return;
+  }
+  
+  const rect = newsImageClear.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const radius = 100;
+  const maskValue = `radial-gradient(circle ${radius}px at ${x}px ${y}px, transparent 0, transparent ${radius}px, black ${radius + 20}px, black 100%)`;
+  
+  newsImageBlurred.style.maskImage = maskValue;
+  newsImageBlurred.style.webkitMaskImage = maskValue;
+}
+
+function handleNewsOverlappingMagnifierLeave() {
+  if (newsImageBlurred) {
+    newsImageBlurred.style.maskImage = 'none';
+    newsImageBlurred.style.webkitMaskImage = 'none';
+  }
+}
+
+function closeNewsOverlapping() {
+  gameState.gamePhase = 11;
+  
+  const placedPasses = document.querySelectorAll('.placed-pass');
+  placedPasses.forEach(pass => {
+    pass.style.transition = 'opacity 0.5s ease-out';
+    pass.style.opacity = '0';
+  });
+  
+  [explodeImage, newsImageClear, newsImageBlurred].forEach(el => fadeOutRemove(el));
+  
+  setTimeout(() => {
+    workspace.removeEventListener('mousemove', handleNewsOverlappingMagnifier);
+    workspace.removeEventListener('mouseleave', handleNewsOverlappingMagnifierLeave);
+    placedPasses.forEach(pass => pass.remove());
+    explodeImage = newsImageClear = newsImageBlurred = null;
+    
+    resetAllTools();
+    switchBackgroundToOriginal();
+    setTimeout(() => {
+    booksIcon.style.display = 'block';
+    setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+    }, 1700);
+  }, 500);
+}
+
+// ===== 第六关：Lukas Diary 拼图（无对话框）=====
+
+function startLukasDiaryPuzzle() {
+  gameState.gamePhase = 12;
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    initLukasDiaryPuzzle();
+  }, 1700);
+}
+
+function initLukasDiaryPuzzle() {
+  const containerWidth = 800;
+  const containerHeight = 800;
+  const fragmentSize = 200;
+  
+  // 确定当前要显示的拼图
+  let currentImage;
+  if (currentLukasPuzzle === 1) {
+    currentImage = 'lukas diary.png';
+  } else if (currentLukasPuzzle === 2) {
+    currentImage = 'lukas diary2.png';
+  } else {
+    currentImage = 'lukas diary3.png';
+  }
+  
+  lukasDiaryDocument = document.createElement('div');
+  lukasDiaryDocument.id = 'lukas-diary-document';
+  lukasDiaryDocument.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: ${containerWidth}px;
+    height: ${containerHeight}px;
+    z-index: 500;
+    opacity: 0;
+    animation: fadeIn 1s ease-out forwards;
+  `;
+  workspace.appendChild(lukasDiaryDocument);
+  
+  const puzzlePositions = [
+    { row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 2 },
+    { row: 1, col: 0 }, { row: 1, col: 1 }, { row: 1, col: 2 },
+    { row: 2, col: 0 }, { row: 2, col: 1 }, { row: 2, col: 2 }
+  ];
+  
+  const offsetX = (containerWidth - fragmentSize * 3) / 2;
+  const offsetY = 50;
+  
+  // 创建目标格子
+  for (let i = 0; i < 9; i++) {
+    const pos = puzzlePositions[i];
+    const target = document.createElement('div');
+    target.className = 'fragment-target';
+    target.id = `lukas-piece-${i}`;
+    target.dataset.correctPiece = i;
+    target.style.cssText = `
+      position: absolute;
+      top: ${offsetY + pos.row * fragmentSize}px;
+      left: ${offsetX + pos.col * fragmentSize}px;
+      width: ${fragmentSize}px;
+      height: ${fragmentSize}px;
+      outline: 1px dashed rgba(255, 255, 255, 0.3);
+      outline-offset: -1px;
+    `;
+    lukasDiaryDocument.appendChild(target);
+  }
+  
+  // 创建拼图块（随机打乱）
+  const pieces = [...Array(9).keys()];
+  const positions = [...Array(9).keys()];
+  positions.sort(() => Math.random() - 0.5);
+  
+  pieces.forEach((pieceNum, index) => {
+    const piece = document.createElement('div');
+    piece.className = 'draggable-fragment';
+    piece.id = `draggable-lukas-piece-${pieceNum}`;
+    piece.dataset.pieceNum = pieceNum;
+    
+    const pos = puzzlePositions[pieceNum];
+    const bgX = (pos.col / 2) * 100;
+    const bgY = (pos.row / 2) * 100;
+    
+    const randomPos = puzzlePositions[positions[index]];
+    const leftPos = offsetX + randomPos.col * fragmentSize;
+    const topPos = offsetY + randomPos.row * fragmentSize;
+    
+    piece.style.cssText = `
+      position: absolute;
+      left: ${leftPos}px;
+      top: ${topPos}px;
+      width: ${fragmentSize}px;
+      height: ${fragmentSize}px;
+      background-image: url('${currentImage}');
+      background-size: 300% 300%;
+      background-position: ${bgX}% ${bgY}%;
+      cursor: grab;
+      z-index: 9999;
+      box-shadow: 3px 3px 10px rgba(0,0,0,0.5);
+    `;
+    
+    makeLukasPieceDraggable(piece);
+    lukasDiaryDocument.appendChild(piece);
+  });
+}
+
+function makeLukasPieceDraggable(piece) {
+  let isDragging = false;
+  let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
+  let isPlaced = false;
+  
+  piece.addEventListener('mousedown', (e) => {
+    if (isPlaced || !gameState.isTapeActive) return;
+    isDragging = true;
+    piece.style.cursor = 'grabbing';
+    piece.style.opacity = '0.8';
+    piece.style.zIndex = '10000';
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = piece.getBoundingClientRect();
+    const parentRect = piece.parentElement.getBoundingClientRect();
+    initialLeft = rect.left - parentRect.left;
+    initialTop = rect.top - parentRect.top;
+    e.preventDefault();
+  });
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging || isPlaced) return;
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+    piece.style.left = (initialLeft + deltaX) + 'px';
+    piece.style.top = (initialTop + deltaY) + 'px';
+  });
+  
+  document.addEventListener('mouseup', () => {
+    if (!isDragging || isPlaced) return;
+    isDragging = false;
+    piece.style.cursor = 'grab';
+    piece.style.opacity = '1';
+    piece.style.zIndex = '9999';
+    const pieceNum = parseInt(piece.dataset.pieceNum);
+    const target = $(`lukas-piece-${pieceNum}`);
+    const pieceRect = piece.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    if (!(pieceRect.right < targetRect.left || pieceRect.left > targetRect.right || 
+          pieceRect.bottom < targetRect.top || pieceRect.top > targetRect.bottom)) {
+      isPlaced = true;
+      placeLukasPiece(piece, target, pieceNum);
     }
   });
-}, 30000); // 每30秒减少1% HP
+}
+
+function placeLukasPiece(piece, target, pieceNum) {
+  lukasDiaryFragments[pieceNum] = true;
+  
+  piece.style.position = 'absolute';
+  piece.style.left = target.style.left;
+  piece.style.top = target.style.top;
+  piece.style.cursor = 'default';
+  piece.style.zIndex = '9000';
+  piece.style.opacity = '1';
+  target.style.display = 'none';
+  
+  // 检查当前拼图是否完成
+  if (Object.keys(lukasDiaryFragments).length === 9) {
+    showCompletedLukasPuzzle();
+  }
+}
+
+function showCompletedLukasPuzzle() {
+  // 显示当前完成的拼图完整图片
+  resetAllTools();
+  lukasDiaryDocument.innerHTML = '';
+  
+  let currentImage;
+  if (currentLukasPuzzle === 1) {
+    currentImage = 'lukas diary.png';
+  } else if (currentLukasPuzzle === 2) {
+    currentImage = 'lukas diary2.png';
+  } else {
+    currentImage = 'lukas diary3.png';
+  }
+  
+  const img = document.createElement('img');
+  img.src = currentImage;
+  img.style.cssText = `
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    cursor: pointer;
+  `;
+  
+  // 点击完整图片进入下一个拼图或显示重叠图片
+  img.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (currentLukasPuzzle < 3) {
+      // 进入下一个拼图
+      fadeOutRemove(lukasDiaryDocument, () => {
+        lukasDiaryDocument = null;
+        lukasDiaryFragments = {};
+        currentLukasPuzzle++;
+        initLukasDiaryPuzzle();
+      });
+    } else {
+      // 所有拼图完成，显示重叠摆放的图片
+      completeLukasDiaryPuzzle();
+    }
+  });
+  
+  lukasDiaryDocument.appendChild(img);
+}
+
+function completeLukasDiaryPuzzle() {
+  gameState.gamePhase = 13;
+  updateArchive('Lukas日记残片', '已修复。这是Lukas的三页日记...');
+  
+  // 移除拼图，清空工作区
+      fadeOutRemove(lukasDiaryDocument, () => {
+        lukasDiaryDocument = null;
+    
+    // 显示噪点效果
+    showNoiseEffect(() => {
+      // 噪点效果结束后，创建三张部分重叠的图片
+      // 从右到左依次是：lukas diary.png, lukas diary2.png, lukas diary3.png
+      // lukas diary.png 在最上方，lukas diary3.png 在最下方
+      lukasImage1 = createLukasImage('lukas diary.png', '504', 200, 0);
+      lukasImage2 = createLukasImage('lukas diary2.png', '502', 0, 0);
+      lukasImage3 = createLukasImage('lukas diary3.png', '500', -200, 0);
+      
+      workspace.append(lukasImage1, lukasImage2, lukasImage3);
+      
+      setTimeout(() => {
+        [lukasImage1, lukasImage2, lukasImage3].forEach(el => el.style.opacity = '1');
+      }, 100);
+    });
+  });
+  
+  resetAllTools();
+  
+  const closeLukasDiary = (e) => {
+    if (e.target.id === 'game-container' || e.target.id === 'workspace') {
+      closeLukasOverlappingImages();
+      $('game-container').removeEventListener('click', closeLukasDiary);
+    }
+  };
+  $('game-container').addEventListener('click', closeLukasDiary);
+}
+
+function showNoiseEffect(callback) {
+  // 创建暗角效果层
+  vignetteLayer = document.createElement('div');
+  vignetteLayer.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at center, transparent 30%, rgba(0, 0, 0, 0.7) 70%, rgba(0, 0, 0, 0.95) 100%);
+    z-index: 600;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.8s ease-in;
+  `;
+  
+  document.body.appendChild(vignetteLayer);
+  
+  // 显示暗角效果
+  setTimeout(() => {
+    vignetteLayer.style.opacity = '1';
+  }, 50);
+  
+  // 暗角显示完成后执行回调
+  setTimeout(() => {
+    if (callback) callback();
+  }, 850);
+}
+
+function createLukasImage(src, zIndex, offsetX, offsetY) {
+  const img = document.createElement('div');
+  img.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(calc(-50% + ${offsetX}px), calc(-50% + ${offsetY}px));
+    width: 600px;
+    height: 600px;
+    background-image: url('${src}');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.3s ease-in-out;
+    z-index: ${zIndex};
+    pointer-events: auto;
+  `;
+  img.addEventListener('click', (e) => bringLukasImageToFront(img, e));
+  return img;
+}
+
+function bringLukasImageToFront(clickedImage, e) {
+  if (e) e.stopPropagation();
+  
+  // 获取当前所有图片的 z-index
+  const z1 = parseInt(lukasImage1.style.zIndex);
+  const z2 = parseInt(lukasImage2.style.zIndex);
+  const z3 = parseInt(lukasImage3.style.zIndex);
+  const maxZ = Math.max(z1, z2, z3);
+  
+  // 如果点击的图片已经在最上层，不做任何操作
+  const currentZ = parseInt(clickedImage.style.zIndex);
+  if (currentZ === maxZ) return;
+  
+  // 将点击的图片设置为最高 z-index
+  clickedImage.style.zIndex = (maxZ + 2).toString();
+}
+
+function closeLukasOverlappingImages() {
+  gameState.gamePhase = 13;
+  [lukasImage1, lukasImage2, lukasImage3].forEach(el => fadeOutRemove(el));
+  
+  // 暗角效果保持不移除
+  
+        lukasDiaryFragments = {};
+  currentLukasPuzzle = 1;
+        resetAllTools();
+        switchBackgroundToOriginal();
+  setTimeout(() => {
+        booksIcon.style.display = 'block';
+        setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+  }, 1700);
+}
+
+// ===== Amelie Letter 拼图关卡（带模糊层）=====
+
+function startAmelieLetterPuzzle() {
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 显示确认对话框
+  showAmelieLetterConfirmDialog();
+}
+
+function showAmelieLetterConfirmDialog() {
+  const dialog = document.createElement('div');
+  dialog.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-image: url('dialogue.png');
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    padding: 3rem 2.5rem;
+    z-index: 10000;
+    width: 500px;
+    min-height: 200px;
+    font-family: 'Indie Flower', cursive;
+    color: #2a2520;
+    font-size: 1.3rem;
+    line-height: 1.6;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  `;
+  
+  const text = document.createElement('p');
+  text.textContent = 'It appears to be a letter that was deliberately damaged. Are you sure you want to repair it?';
+  text.style.marginBottom = '1.5rem';
+  
+  const buttonContainer = document.createElement('div');
+  buttonContainer.style.cssText = `
+    display: flex;
+    gap: 2rem;
+    justify-content: center;
+  `;
+  
+  const yesButton = document.createElement('span');
+  yesButton.textContent = 'Yes';
+  yesButton.style.cssText = `
+    font-family: 'Indie Flower', cursive;
+    font-size: 1.4rem;
+    color: #2a2520;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-decoration: underline;
+  `;
+  yesButton.onmouseover = () => {
+    yesButton.style.color = '#000';
+    yesButton.style.transform = 'scale(1.1)';
+    yesButton.style.fontWeight = 'bold';
+  };
+  yesButton.onmouseout = () => {
+    yesButton.style.color = '#2a2520';
+    yesButton.style.transform = 'scale(1)';
+    yesButton.style.fontWeight = 'normal';
+  };
+  
+  const noButton = document.createElement('span');
+  noButton.textContent = 'No';
+  noButton.style.cssText = `
+    font-family: 'Indie Flower', cursive;
+    font-size: 1.4rem;
+    color: #d32f2f;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-decoration: underline;
+  `;
+  noButton.onmouseover = () => {
+    noButton.style.color = '#a02020';
+    noButton.style.transform = 'scale(1.1)';
+    noButton.style.fontWeight = 'bold';
+  };
+  noButton.onmouseout = () => {
+    noButton.style.color = '#d32f2f';
+    noButton.style.transform = 'scale(1)';
+    noButton.style.fontWeight = 'normal';
+  };
+  
+  yesButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fadeOutRemove(dialog, () => {
+      gameState.gamePhase = 14;
+      switchBackgroundToLevel();
+      setTimeout(() => {
+        initAmelieLetterPuzzle();
+      }, 1700);
+    });
+  });
+  
+  noButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    gameState.amelieLetterDeclined = true;
+    fadeOutRemove(dialog, () => {
+      booksIcon.style.display = 'block';
+      setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+    });
+  });
+  
+  buttonContainer.append(yesButton, noButton);
+  dialog.append(text, buttonContainer);
+  $('game-container').appendChild(dialog);
+  
+  setTimeout(() => dialog.style.opacity = '1', 100);
+}
+
+function initAmelieLetterPuzzle() {
+  const containerWidth = 800;
+  const containerHeight = 800;
+  const fragmentSize = 150; // 4×4拼图，每块更小
+  
+  amelieLetterDocument = document.createElement('div');
+  amelieLetterDocument.id = 'amelie-letter-document';
+  amelieLetterDocument.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: ${containerWidth}px;
+    height: ${containerHeight}px;
+    z-index: 500;
+    opacity: 0;
+    animation: fadeIn 1s ease-out forwards;
+  `;
+  workspace.appendChild(amelieLetterDocument);
+  
+  // 4×4的拼图位置
+  const puzzlePositions = [
+    { row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 2 }, { row: 0, col: 3 },
+    { row: 1, col: 0 }, { row: 1, col: 1 }, { row: 1, col: 2 }, { row: 1, col: 3 },
+    { row: 2, col: 0 }, { row: 2, col: 1 }, { row: 2, col: 2 }, { row: 2, col: 3 },
+    { row: 3, col: 0 }, { row: 3, col: 1 }, { row: 3, col: 2 }, { row: 3, col: 3 }
+  ];
+  
+  const offsetX = (containerWidth - fragmentSize * 4) / 2;
+  const offsetY = (containerHeight - fragmentSize * 4) / 2;
+  
+  // 创建目标格子
+  for (let i = 0; i < 16; i++) {
+    const pos = puzzlePositions[i];
+    const target = document.createElement('div');
+    target.className = 'fragment-target';
+    target.id = `amelie-letter-piece-${i}`;
+    target.dataset.correctPiece = i;
+    target.style.cssText = `
+      position: absolute;
+      top: ${offsetY + pos.row * fragmentSize}px;
+      left: ${offsetX + pos.col * fragmentSize}px;
+      width: ${fragmentSize}px;
+      height: ${fragmentSize}px;
+      outline: 1px dashed rgba(255, 255, 255, 0.3);
+      outline-offset: -1px;
+    `;
+    amelieLetterDocument.appendChild(target);
+  }
+  
+  // 创建拼图块（随机打乱）
+  const pieces = [...Array(16).keys()];
+  const positions = [...Array(16).keys()];
+  positions.sort(() => Math.random() - 0.5);
+  
+  pieces.forEach((pieceNum, index) => {
+    const pos = puzzlePositions[pieceNum];
+    const bgX = (pos.col / 3) * 100;
+    const bgY = (pos.row / 3) * 100;
+    
+    const randomPos = puzzlePositions[positions[index]];
+    const leftPos = offsetX + randomPos.col * fragmentSize;
+    const topPos = offsetY + randomPos.row * fragmentSize;
+    
+    // 创建拼图块容器
+    const pieceContainer = document.createElement('div');
+    pieceContainer.className = 'draggable-fragment';
+    pieceContainer.id = `draggable-amelie-letter-piece-${pieceNum}`;
+    pieceContainer.dataset.pieceNum = pieceNum;
+    pieceContainer.style.cssText = `
+      position: absolute;
+      left: ${leftPos}px;
+      top: ${topPos}px;
+      width: ${fragmentSize}px;
+      height: ${fragmentSize}px;
+      cursor: grab;
+      z-index: 9999;
+      box-shadow: 3px 3px 10px rgba(0,0,0,0.5);
+    `;
+    
+    // 清晰层
+    const clearLayer = document.createElement('div');
+    clearLayer.style.cssText = `
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background-image: url('Amelie letter.png');
+      background-size: 400% 400%;
+      background-position: ${bgX}% ${bgY}%;
+    `;
+    
+    // 模糊层
+    const blurredLayer = document.createElement('div');
+    blurredLayer.className = 'piece-blurred-layer';
+    blurredLayer.style.cssText = `
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background-image: url('Amelie letter.png');
+      background-size: 400% 400%;
+      background-position: ${bgX}% ${bgY}%;
+      filter: blur(8px);
+      pointer-events: none;
+    `;
+    
+    pieceContainer.append(clearLayer, blurredLayer);
+    
+    makeAmelieLetterPieceDraggable(pieceContainer);
+    amelieLetterDocument.appendChild(pieceContainer);
+  });
+  
+  // 添加放大镜效果
+  amelieLetterDocument.addEventListener('mousemove', handleAmelieLetterMagnifier);
+  amelieLetterDocument.addEventListener('mouseleave', handleAmelieLetterMagnifierLeave);
+}
+
+function makeAmelieLetterPieceDraggable(piece) {
+  let isDragging = false;
+  let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
+  let isPlaced = false;
+  
+  piece.addEventListener('mousedown', (e) => {
+    if (isPlaced || !gameState.isTapeActive) return;
+    isDragging = true;
+    piece.style.cursor = 'grabbing';
+    piece.style.opacity = '0.8';
+    piece.style.zIndex = '10000';
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = piece.getBoundingClientRect();
+    const parentRect = piece.parentElement.getBoundingClientRect();
+    initialLeft = rect.left - parentRect.left;
+    initialTop = rect.top - parentRect.top;
+    e.preventDefault();
+  });
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging || isPlaced) return;
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+    piece.style.left = (initialLeft + deltaX) + 'px';
+    piece.style.top = (initialTop + deltaY) + 'px';
+  });
+  
+  document.addEventListener('mouseup', () => {
+    if (!isDragging || isPlaced) return;
+    isDragging = false;
+    piece.style.cursor = 'grab';
+    piece.style.opacity = '1';
+    piece.style.zIndex = '9999';
+    const pieceNum = parseInt(piece.dataset.pieceNum);
+    const target = $(`amelie-letter-piece-${pieceNum}`);
+    const pieceRect = piece.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    if (!(pieceRect.right < targetRect.left || pieceRect.left > targetRect.right || 
+          pieceRect.bottom < targetRect.top || pieceRect.top > targetRect.bottom)) {
+      isPlaced = true;
+      placeAmelieLetterPiece(piece, target, pieceNum);
+    }
+  });
+}
+
+function placeAmelieLetterPiece(piece, target, pieceNum) {
+  amelieLetterFragments[pieceNum] = true;
+  
+  piece.style.position = 'absolute';
+  piece.style.left = target.style.left;
+  piece.style.top = target.style.top;
+  piece.style.cursor = 'default';
+  piece.style.zIndex = '9000';
+  piece.style.opacity = '1';
+  target.style.display = 'none';
+  
+  if (Object.keys(amelieLetterFragments).length === 16) {
+    completeAmelieLetterPuzzle();
+  }
+}
+
+function completeAmelieLetterPuzzle() {
+  gameState.gamePhase = 15;
+  updateArchive('Amelie信件残片', '已修复。这是一封信...');
+  
+  resetAllTools();
+  
+  // 移除放大镜事件（因为拼图块的放大镜不再适用）
+  amelieLetterDocument.removeEventListener('mousemove', handleAmelieLetterMagnifier);
+  amelieLetterDocument.removeEventListener('mouseleave', handleAmelieLetterMagnifierLeave);
+  
+  // 移除所有拼图块和目标格子
+  const fragments = amelieLetterDocument.querySelectorAll('.draggable-fragment, .fragment-target');
+  fragments.forEach(el => el.remove());
+  
+  // 让暗角变得更暗
+  if (vignetteLayer) {
+    vignetteLayer.style.transition = 'background 1s ease-in-out';
+    vignetteLayer.style.background = 'radial-gradient(circle at center, transparent 20%, rgba(0, 0, 0, 0.85) 60%, rgba(0, 0, 0, 0.98) 100%)';
+  }
+  
+  // 创建完整的带模糊层的图片
+  const amelieLetterClear = document.createElement('img');
+  amelieLetterClear.src = 'Amelie letter.png';
+  amelieLetterClear.style.cssText = `
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  `;
+  
+  const amelieLetterBlurred = document.createElement('img');
+  amelieLetterBlurred.src = 'Amelie letter.png';
+  amelieLetterBlurred.className = 'amelie-letter-complete-blurred';
+  amelieLetterBlurred.style.cssText = `
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    filter: blur(8px);
+    pointer-events: none;
+  `;
+  
+  amelieLetterDocument.append(amelieLetterClear, amelieLetterBlurred);
+  
+  // 添加完整图片的放大镜效果
+  amelieLetterDocument.addEventListener('mousemove', handleAmelieLetterCompleteMagnifier);
+  amelieLetterDocument.addEventListener('mouseleave', handleAmelieLetterCompleteMagnifierLeave);
+  
+  const closeLetter = (e) => {
+    if (e.target.id === 'game-container') {
+      gameState.gamePhase = 15;
+      fadeOutRemove(amelieLetterDocument, () => {
+        amelieLetterDocument.removeEventListener('mousemove', handleAmelieLetterCompleteMagnifier);
+        amelieLetterDocument.removeEventListener('mouseleave', handleAmelieLetterCompleteMagnifierLeave);
+        amelieLetterDocument = null;
+        amelieLetterFragments = {};
+        resetAllTools();
+        switchBackgroundToOriginal();
+        setTimeout(() => {
+          booksIcon.style.display = 'block';
+          setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+        }, 1700);
+      });
+      $('game-container').removeEventListener('click', closeLetter);
+    }
+  };
+  $('game-container').addEventListener('click', closeLetter);
+}
+
+function handleAmelieLetterCompleteMagnifier(e) {
+  const amelieLetterBlurred = amelieLetterDocument.querySelector('.amelie-letter-complete-blurred');
+  if (!amelieLetterBlurred || !gameState.isMagnifierActive) {
+    if (amelieLetterBlurred) {
+      amelieLetterBlurred.style.maskImage = 'none';
+      amelieLetterBlurred.style.webkitMaskImage = 'none';
+    }
+    return;
+  }
+  
+  const rect = amelieLetterDocument.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const radius = 100;
+  const maskValue = `radial-gradient(circle ${radius}px at ${x}px ${y}px, transparent 0, transparent ${radius}px, black ${radius + 20}px, black 100%)`;
+  
+  amelieLetterBlurred.style.maskImage = maskValue;
+  amelieLetterBlurred.style.webkitMaskImage = maskValue;
+}
+
+function handleAmelieLetterCompleteMagnifierLeave() {
+  const amelieLetterBlurred = amelieLetterDocument.querySelector('.amelie-letter-complete-blurred');
+  if (amelieLetterBlurred) {
+    amelieLetterBlurred.style.maskImage = 'none';
+    amelieLetterBlurred.style.webkitMaskImage = 'none';
+  }
+}
+
+function handleAmelieLetterMagnifier(e) {
+  if (!gameState.isMagnifierActive) {
+    // 清除所有模糊层的mask
+    const blurredLayers = amelieLetterDocument.querySelectorAll('.piece-blurred-layer');
+    blurredLayers.forEach(layer => {
+      layer.style.maskImage = 'none';
+      layer.style.webkitMaskImage = 'none';
+    });
+    return;
+  }
+  
+  const radius = 100;
+  
+  // 对每个拼图块应用放大镜效果
+  const pieces = amelieLetterDocument.querySelectorAll('.draggable-fragment');
+  pieces.forEach(piece => {
+    const blurredLayer = piece.querySelector('.piece-blurred-layer');
+    if (!blurredLayer) return;
+    
+    const pieceRect = piece.getBoundingClientRect();
+    const x = e.clientX - pieceRect.left;
+    const y = e.clientY - pieceRect.top;
+    
+    // 检查鼠标是否在拼图块内
+    if (x >= 0 && x <= pieceRect.width && y >= 0 && y <= pieceRect.height) {
+      const maskValue = `radial-gradient(circle ${radius}px at ${x}px ${y}px, transparent 0, transparent ${radius}px, black ${radius + 20}px, black 100%)`;
+      blurredLayer.style.maskImage = maskValue;
+      blurredLayer.style.webkitMaskImage = maskValue;
+    } else {
+      blurredLayer.style.maskImage = 'none';
+      blurredLayer.style.webkitMaskImage = 'none';
+    }
+  });
+}
+
+function handleAmelieLetterMagnifierLeave() {
+  const blurredLayers = amelieLetterDocument.querySelectorAll('.piece-blurred-layer');
+  blurredLayers.forEach(layer => {
+    layer.style.maskImage = 'none';
+    layer.style.webkitMaskImage = 'none';
+  });
+}
+
+// ===== Lukas Diary Final 拼图关卡（4×4）=====
+
+function startLukasDiaryFinalPuzzle() {
+  gameState.gamePhase = 16;
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    initLukasDiaryFinalPuzzle();
+  }, 1700);
+}
+
+function initLukasDiaryFinalPuzzle() {
+  const containerWidth = 800;
+  const containerHeight = 800;
+  const fragmentSize = 150; // 4×4拼图，每块150px
+  
+  lukasDiaryFinalDocument = document.createElement('div');
+  lukasDiaryFinalDocument.id = 'lukas-diary-final-document';
+  lukasDiaryFinalDocument.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: ${containerWidth}px;
+    height: ${containerHeight}px;
+    z-index: 500;
+    opacity: 0;
+    animation: fadeIn 1s ease-out forwards;
+  `;
+  workspace.appendChild(lukasDiaryFinalDocument);
+  
+  // 4×4的拼图位置
+  const puzzlePositions = [
+    { row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 2 }, { row: 0, col: 3 },
+    { row: 1, col: 0 }, { row: 1, col: 1 }, { row: 1, col: 2 }, { row: 1, col: 3 },
+    { row: 2, col: 0 }, { row: 2, col: 1 }, { row: 2, col: 2 }, { row: 2, col: 3 },
+    { row: 3, col: 0 }, { row: 3, col: 1 }, { row: 3, col: 2 }, { row: 3, col: 3 }
+  ];
+  
+  const offsetX = (containerWidth - fragmentSize * 4) / 2;
+  const offsetY = (containerHeight - fragmentSize * 4) / 2;
+  
+  // 创建目标格子
+  for (let i = 0; i < 16; i++) {
+    const pos = puzzlePositions[i];
+    const target = document.createElement('div');
+    target.className = 'fragment-target';
+    target.id = `lukas-final-piece-${i}`;
+    target.dataset.correctPiece = i;
+    target.style.cssText = `
+      position: absolute;
+      top: ${offsetY + pos.row * fragmentSize}px;
+      left: ${offsetX + pos.col * fragmentSize}px;
+      width: ${fragmentSize}px;
+      height: ${fragmentSize}px;
+      outline: 1px dashed rgba(255, 255, 255, 0.3);
+      outline-offset: -1px;
+    `;
+    lukasDiaryFinalDocument.appendChild(target);
+  }
+  
+  // 创建拼图块（随机打乱）
+  const pieces = [...Array(16).keys()];
+  const positions = [...Array(16).keys()];
+  positions.sort(() => Math.random() - 0.5);
+  
+  pieces.forEach((pieceNum, index) => {
+    const pos = puzzlePositions[pieceNum];
+    const bgX = (pos.col / 3) * 100;
+    const bgY = (pos.row / 3) * 100;
+    
+    const randomPos = puzzlePositions[positions[index]];
+    const leftPos = offsetX + randomPos.col * fragmentSize;
+    const topPos = offsetY + randomPos.row * fragmentSize;
+    
+    const piece = document.createElement('div');
+    piece.className = 'draggable-fragment';
+    piece.id = `draggable-lukas-final-piece-${pieceNum}`;
+    piece.dataset.pieceNum = pieceNum;
+    piece.style.cssText = `
+      position: absolute;
+      left: ${leftPos}px;
+      top: ${topPos}px;
+      width: ${fragmentSize}px;
+      height: ${fragmentSize}px;
+      background-image: url('lukasdiaryfinal.png');
+      background-size: 400% 400%;
+      background-position: ${bgX}% ${bgY}%;
+      cursor: grab;
+      z-index: 9999;
+      box-shadow: 3px 3px 10px rgba(0,0,0,0.5);
+    `;
+    
+    makeLukasDiaryFinalPieceDraggable(piece);
+    lukasDiaryFinalDocument.appendChild(piece);
+  });
+}
+
+function makeLukasDiaryFinalPieceDraggable(piece) {
+  let isDragging = false;
+  let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
+  let isPlaced = false;
+  
+  piece.addEventListener('mousedown', (e) => {
+    if (isPlaced || !gameState.isTapeActive) return;
+    isDragging = true;
+    piece.style.cursor = 'grabbing';
+    piece.style.opacity = '0.8';
+    piece.style.zIndex = '10000';
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = piece.getBoundingClientRect();
+    const parentRect = piece.parentElement.getBoundingClientRect();
+    initialLeft = rect.left - parentRect.left;
+    initialTop = rect.top - parentRect.top;
+    e.preventDefault();
+  });
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging || isPlaced) return;
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+    piece.style.left = (initialLeft + deltaX) + 'px';
+    piece.style.top = (initialTop + deltaY) + 'px';
+  });
+  
+  document.addEventListener('mouseup', () => {
+    if (!isDragging || isPlaced) return;
+    isDragging = false;
+    piece.style.cursor = 'grab';
+    piece.style.opacity = '1';
+    piece.style.zIndex = '9999';
+    const pieceNum = parseInt(piece.dataset.pieceNum);
+    const target = $(`lukas-final-piece-${pieceNum}`);
+    const pieceRect = piece.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    if (!(pieceRect.right < targetRect.left || pieceRect.left > targetRect.right || 
+          pieceRect.bottom < targetRect.top || pieceRect.top > targetRect.bottom)) {
+      isPlaced = true;
+      placeLukasDiaryFinalPiece(piece, target, pieceNum);
+    }
+  });
+}
+
+function placeLukasDiaryFinalPiece(piece, target, pieceNum) {
+  lukasDiaryFinalFragments[pieceNum] = true;
+  
+  piece.style.position = 'absolute';
+  piece.style.left = target.style.left;
+  piece.style.top = target.style.top;
+  piece.style.cursor = 'default';
+  piece.style.zIndex = '9000';
+  piece.style.opacity = '1';
+  target.style.display = 'none';
+  
+  if (Object.keys(lukasDiaryFinalFragments).length === 16) {
+    completeLukasDiaryFinalPuzzle();
+  }
+}
+
+function completeLukasDiaryFinalPuzzle() {
+  gameState.gamePhase = 17;
+  updateArchive('Lukas最终日记', '已修复。这是Lukas的最后一页日记...');
+  
+  resetAllTools();
+  lukasDiaryFinalDocument.innerHTML = '';
+  
+  const img = document.createElement('img');
+  img.src = 'lukasdiaryfinal.png';
+  img.style.cssText = `
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  `;
+  
+  lukasDiaryFinalDocument.appendChild(img);
+  
+  const closeFinalDiary = (e) => {
+    if (e.target.id === 'game-container') {
+      fadeOutRemove(lukasDiaryFinalDocument, () => {
+        lukasDiaryFinalDocument = null;
+        lukasDiaryFinalFragments = {};
+        resetAllTools();
+        switchBackgroundToOriginal();
+        setTimeout(() => {
+          booksIcon.style.display = 'block';
+          setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+        }, 1700);
+      });
+      $('game-container').removeEventListener('click', closeFinalDiary);
+    }
+  };
+  $('game-container').addEventListener('click', closeFinalDiary);
+}
+
+// ===== Amelie Diary Final 图片切换关卡 =====
+
+function startAmelieDiaryFinalSwitching() {
+  gameState.gamePhase = 18;
+  amelieDiaryFinalClickCount = 1;
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    showAmelieDiaryFinalSwitchingImage('1-.png');
+  }, 1700);
+}
+
+function showAmelieDiaryFinalSwitchingImage(imageSrc) {
+  if (!amelieDiaryFinalSwitchingImage) {
+    amelieDiaryFinalSwitchingImage = document.createElement('div');
+    amelieDiaryFinalSwitchingImage.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 600px;
+      height: 600px;
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.5s ease-in;
+      z-index: 500;
+    `;
+    workspace.appendChild(amelieDiaryFinalSwitchingImage);
+    amelieDiaryFinalSwitchingImage.addEventListener('click', handleAmelieDiaryFinalImageClick);
+  }
+  
+  amelieDiaryFinalSwitchingImage.style.backgroundImage = `url('${imageSrc}')`;
+  setTimeout(() => amelieDiaryFinalSwitchingImage.style.opacity = '1', 100);
+}
+
+function handleAmelieDiaryFinalImageClick(e) {
+  e.stopPropagation();
+  if (amelieDiaryFinalClickCount === 1) {
+    amelieDiaryFinalClickCount = 2;
+    amelieDiaryFinalSwitchingImage.style.opacity = '0';
+    setTimeout(() => showAmelieDiaryFinalSwitchingImage('2-.png'), 500);
+  } else if (amelieDiaryFinalClickCount === 2) {
+    amelieDiaryFinalClickCount = 3;
+    // 移除切换图片容器
+    fadeOutRemove(amelieDiaryFinalSwitchingImage, () => {
+      amelieDiaryFinalSwitchingImage = null;
+      // 创建两张重叠的图片
+      createAmelieDiaryFinalOverlappingImages();
+    });
+  }
+}
+
+function createAmelieDiaryFinalOverlappingImages() {
+  gameState.gamePhase = 19;
+  updateArchive('Amelie最终日记', '这是Amelie的最后一页日记...');
+  
+  // 让暗角变得更暗
+  if (vignetteLayer) {
+    vignetteLayer.style.transition = 'background 1s ease-in-out';
+    vignetteLayer.style.background = 'radial-gradient(circle at center, transparent 15%, rgba(0, 0, 0, 0.9) 55%, rgba(0, 0, 0, 0.99) 100%)';
+  }
+  
+  // 创建 Amelie diary final.png（左侧，初始在上层）
+  amelieDiaryFinalImage = document.createElement('div');
+  amelieDiaryFinalImage.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 45%;
+    transform: translate(-50%, -50%);
+    width: 600px;
+    height: 600px;
+    background-image: url('Amelie diary final.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    z-index: 502;
+    pointer-events: auto;
+  `;
+  amelieDiaryFinalImage.addEventListener('click', swapAmelieFinalLayers);
+  
+  // 创建 news2.png（右侧，初始在下层）
+  news2Image = document.createElement('div');
+  news2Image.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 55%;
+    transform: translate(-50%, -50%);
+    width: 680px;
+    height: 680px;
+    background-image: url('news2.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    cursor: default;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    z-index: 500;
+    pointer-events: none;
+  `;
+  
+  workspace.append(amelieDiaryFinalImage, news2Image);
+  
+  setTimeout(() => {
+    amelieDiaryFinalImage.style.opacity = '1';
+    news2Image.style.opacity = '1';
+  }, 100);
+  
+  const closeAmelieFinal = (e) => {
+    if (e.target.id === 'game-container' || e.target.id === 'workspace') {
+      closeAmelieDiaryFinalOverlapping();
+      $('game-container').removeEventListener('click', closeAmelieFinal);
+    }
+  };
+  $('game-container').addEventListener('click', closeAmelieFinal);
+}
+
+function swapAmelieFinalLayers(e) {
+  if (e) e.stopPropagation();
+  
+  const amelieZ = parseInt(amelieDiaryFinalImage.style.zIndex);
+  const newsZ = parseInt(news2Image.style.zIndex);
+  
+  if (amelieZ > newsZ) {
+    // Amelie在上层，切换到news2在上层
+    amelieDiaryFinalImage.style.zIndex = '500';
+    news2Image.style.zIndex = '502';
+    
+    amelieDiaryFinalImage.removeEventListener('click', swapAmelieFinalLayers);
+    amelieDiaryFinalImage.style.cursor = 'default';
+    amelieDiaryFinalImage.style.pointerEvents = 'none';
+    
+    news2Image.style.cursor = 'pointer';
+    news2Image.style.pointerEvents = 'auto';
+    news2Image.addEventListener('click', swapAmelieFinalLayers);
+  } else {
+    // news2在上层，切换到Amelie在上层
+    amelieDiaryFinalImage.style.zIndex = '502';
+    news2Image.style.zIndex = '500';
+    
+    news2Image.removeEventListener('click', swapAmelieFinalLayers);
+    news2Image.style.cursor = 'default';
+    news2Image.style.pointerEvents = 'none';
+    
+    amelieDiaryFinalImage.style.cursor = 'pointer';
+    amelieDiaryFinalImage.style.pointerEvents = 'auto';
+    amelieDiaryFinalImage.addEventListener('click', swapAmelieFinalLayers);
+  }
+}
+
+function closeAmelieDiaryFinalOverlapping() {
+  [amelieDiaryFinalImage, news2Image].forEach(el => fadeOutRemove(el));
+  
+  amelieDiaryFinalClickCount = 0;
+  resetAllTools();
+  switchBackgroundToOriginal();
+  setTimeout(() => {
+    booksIcon.style.display = 'block';
+    setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+  }, 1700);
+}
+
+// ===== 最终关卡：End =====
+
+function startEndPhase() {
+  gameState.gamePhase = 20;
+  booksIcon.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+  }, 500);
+  
+  // 先切换背景，等背景切换完成后再显示关卡内容
+  switchBackgroundToLevel();
+  setTimeout(() => {
+    showEndImage();
+  }, 1700);
+}
+
+function showEndImage() {
+  endImage = document.createElement('div');
+  endImage.style.cssText = `
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 600px;
+    height: 600px;
+    background-image: url('end.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    z-index: 500;
+  `;
+  workspace.appendChild(endImage);
+  
+  setTimeout(() => {
+    endImage.style.opacity = '1';
+    // 显示后等待1秒再显示对话框
+    setTimeout(() => {
+      showEndDialog();
+    }, 1000);
+  }, 100);
+}
+
+function showEndDialog() {
+  const dialog = document.createElement('div');
+  dialog.style.cssText = `
+    position: absolute;
+    top: 8%;
+    left: 50%;
+    transform: translate(-50%, 0);
+    background-image: url('dialogue.png');
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    padding: 3rem 2.5rem;
+    z-index: 10000;
+    width: 500px;
+    min-height: 200px;
+    font-family: 'Indie Flower', cursive;
+    color: #2a2520;
+    font-size: 1.3rem;
+    line-height: 1.6;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  `;
+  
+  const text = document.createElement('p');
+  text.textContent = 'It seems there is something written on the back...';
+  text.style.marginBottom = '1.5rem';
+  
+  const buttonContainer = document.createElement('div');
+  buttonContainer.style.cssText = `
+    display: flex;
+    gap: 2rem;
+    justify-content: center;
+  `;
+  
+  const flipButton = document.createElement('span');
+  flipButton.textContent = 'Flip';
+  flipButton.style.cssText = `
+    font-family: 'Indie Flower', cursive;
+    font-size: 1.4rem;
+    color: #2a2520;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-decoration: underline;
+  `;
+  flipButton.onmouseover = () => {
+    flipButton.style.color = '#000';
+    flipButton.style.transform = 'scale(1.1)';
+    flipButton.style.fontWeight = 'bold';
+  };
+  flipButton.onmouseout = () => {
+    flipButton.style.color = '#2a2520';
+    flipButton.style.transform = 'scale(1)';
+    flipButton.style.fontWeight = 'normal';
+  };
+  
+  const exitButton = document.createElement('span');
+  exitButton.textContent = "Exit, I won't look";
+  exitButton.style.cssText = `
+    font-family: 'Indie Flower', cursive;
+    font-size: 1.4rem;
+    color: #d32f2f;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-decoration: underline;
+  `;
+  exitButton.onmouseover = () => {
+    exitButton.style.color = '#a02020';
+    exitButton.style.transform = 'scale(1.1)';
+    exitButton.style.fontWeight = 'bold';
+  };
+  exitButton.onmouseout = () => {
+    exitButton.style.color = '#d32f2f';
+    exitButton.style.transform = 'scale(1)';
+    exitButton.style.fontWeight = 'normal';
+  };
+  
+  flipButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fadeOutRemove(dialog, () => {
+      // 翻转图片
+      flipToEnd2();
+    });
+  });
+  
+  exitButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fadeOutRemove(dialog, () => {
+      // 直接关闭关卡
+      closeEndPhase();
+    });
+  });
+  
+  buttonContainer.append(flipButton, exitButton);
+  dialog.append(text, buttonContainer);
+  $('game-container').appendChild(dialog);
+  
+  setTimeout(() => dialog.style.opacity = '1', 100);
+}
+
+function flipToEnd2() {
+  // 改变图片为end2.png
+  endImage.style.opacity = '0';
+  setTimeout(() => {
+    endImage.style.backgroundImage = "url('end2.png')";
+    setTimeout(() => {
+      endImage.style.opacity = '1';
+    }, 100);
+  }, 500);
+  
+  // 点击背景可关闭
+  const closeEnd = (e) => {
+    if (e.target.id === 'game-container' || e.target.id === 'workspace') {
+      closeEndPhase();
+      $('game-container').removeEventListener('click', closeEnd);
+    }
+  };
+  $('game-container').addEventListener('click', closeEnd);
+}
+
+function closeEndPhase() {
+  fadeOutRemove(endImage, () => {
+    endImage = null;
+    resetAllTools();
+    switchBackgroundToOriginal();
+    setTimeout(() => {
+      booksIcon.style.display = 'block';
+      setTimeout(() => booksIcon.style.opacity = '0.9', 100);
+      
+      // 等待books图标出现后，开始慢慢变黑
+      setTimeout(() => {
+        startFinalPhase();
+      }, 2000);
+    }, 1700);
+  });
+}
+
+// ===== 最终阶段：黑屏与密码 =====
+
+function startFinalPhase() {
+  isFinalPhase = true;
+  
+  // 创建黑色遮罩层
+  blackOverlay = document.createElement('div');
+  blackOverlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: black;
+    z-index: 9999;
+    opacity: 0;
+    transition: opacity 3s ease-in-out;
+    pointer-events: none;
+  `;
+  document.body.appendChild(blackOverlay);
+  
+  // 慢慢变黑
+  setTimeout(() => {
+    blackOverlay.style.opacity = '1';
+  }, 100);
+  
+  // 隐藏所有工具栏图标，除了box
+  setTimeout(() => {
+    booksIcon.style.opacity = '0';
+    penHotspot.style.opacity = '0';
+    tapeHotspot.style.opacity = '0';
+    tweezersHotspot.style.opacity = '0';
+    magnifierHotspot.style.opacity = '0';
+    passSlot.style.opacity = '0';
+    
+    setTimeout(() => {
+      booksIcon.style.display = 'none';
+      penHotspot.style.display = 'none';
+      tapeHotspot.style.display = 'none';
+      tweezersHotspot.style.display = 'none';
+      magnifierHotspot.style.display = 'none';
+      passSlot.style.display = 'none';
+    }, 500);
+  }, 3000);
+  
+  // 创建工具栏遮罩层，覆盖整个toolbar但box保持可见
+  const toolbarOverlay = document.createElement('div');
+  const toolbar = document.getElementById('toolbar');
+  toolbarOverlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 80px;
+    height: 100%;
+    background-color: black;
+    z-index: 9998;
+    opacity: 0;
+    transition: opacity 3s ease-in-out;
+    pointer-events: none;
+  `;
+  document.body.appendChild(toolbarOverlay);
+  
+  // 提高box的z-index，确保它在遮罩层上方
+  boxHotspot.style.position = 'relative';
+  boxHotspot.style.zIndex = '10000';
+  
+  // 工具栏遮罩层也慢慢变黑
+  setTimeout(() => {
+    toolbarOverlay.style.opacity = '1';
+  }, 100);
+}
+
+function showPasswordWheel() {
+  const dialog = document.createElement('div');
+  dialog.id = 'password-dialog';
+  dialog.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10001;
+    background-image: url('dialogue.png');
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    padding: 3rem 2.5rem;
+    width: 500px;
+    min-height: 250px;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  `;
+  
+  const title = document.createElement('div');
+  title.textContent = 'Enter Password';
+  title.style.cssText = `
+    font-family: 'Indie Flower', cursive;
+    font-size: 1.8rem;
+    color: #2a2520;
+    text-align: center;
+    margin-bottom: 2.5rem;
+  `;
+  
+  const inputContainer = document.createElement('div');
+  inputContainer.style.cssText = `
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    justify-content: center;
+  `;
+  
+  // 创建4个输入框
+  const inputs = [];
+  for (let i = 0; i < 4; i++) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 1;
+    input.style.cssText = `
+      width: 50px;
+      height: 50px;
+      font-family: 'Courier New', monospace;
+      font-size: 2rem;
+      text-align: center;
+      border: none;
+      border-bottom: 3px solid #2a2520;
+      background: transparent;
+      color: #2a2520;
+      outline: none;
+      transition: border-color 0.3s;
+    `;
+    
+    // 只允许输入数字
+    input.addEventListener('input', (e) => {
+      e.target.value = e.target.value.replace(/[^0-9]/g, '');
+      if (e.target.value && i < 3) {
+        inputs[i + 1].focus();
+      }
+    });
+    
+    // 按下退格键时返回上一个输入框
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && !e.target.value && i > 0) {
+        inputs[i - 1].focus();
+      }
+      if (e.key === 'Enter') {
+        checkPassword();
+      }
+    });
+    
+    input.addEventListener('focus', () => {
+      input.style.borderColor = '#d32f2f';
+    });
+    
+    input.addEventListener('blur', () => {
+      input.style.borderColor = '#2a2520';
+    });
+    
+    inputs.push(input);
+    inputContainer.appendChild(input);
+  }
+  
+  // 检查密码函数
+  function checkPassword() {
+    const password = inputs.map(input => input.value).join('');
+    if (password === '1225') {
+      fadeOutRemove(dialog, () => {
+        showFinalTruth();
+      });
+    } else if (password.length === 4) {
+      // 错误密码，摇晃效果并清空
+      dialog.style.animation = 'shake 0.5s';
+      setTimeout(() => {
+        dialog.style.animation = '';
+        inputs.forEach(input => input.value = '');
+        inputs[0].focus();
+      }, 500);
+    }
+  }
+  
+  // 添加摇晃动画
+  if (!document.querySelector('#shake-keyframes')) {
+    const style = document.createElement('style');
+    style.id = 'shake-keyframes';
+    style.textContent = `
+      @keyframes shake {
+        0%, 100% { transform: translate(-50%, -50%); }
+        10%, 30%, 50%, 70%, 90% { transform: translate(-52%, -50%); }
+        20%, 40%, 60%, 80% { transform: translate(-48%, -50%); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+  
+  dialog.append(title, inputContainer);
+  document.body.appendChild(dialog);
+  
+  setTimeout(() => {
+    dialog.style.opacity = '1';
+    inputs[0].focus();
+  }, 100);
+}
+
+function showFinalTruth() {
+  // 创建更深的暗化遮罩
+  const darkenOverlay = document.createElement('div');
+  darkenOverlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    z-index: 10001;
+    opacity: 0;
+    transition: opacity 2s ease-in-out;
+    pointer-events: none;
+  `;
+  document.body.appendChild(darkenOverlay);
+  
+  // 创建主容器
+  const truthContainer = document.createElement('div');
+  truthContainer.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10002;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3rem;
+  `;
+  
+  // 创建图片容器（并列显示）
+  const imageContainer = document.createElement('div');
+  imageContainer.style.cssText = `
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 3rem;
+    opacity: 0;
+    animation: fadeInTruth 2s ease-in forwards;
+  `;
+  
+  // 创建eye.png
+  const eyeImage = document.createElement('img');
+  eyeImage.src = 'eye.png';
+  eyeImage.style.cssText = `
+    width: 300px;
+    height: 300px;
+    object-fit: contain;
+  `;
+  
+  // 创建teeth.png（小一点）
+  const teethImage = document.createElement('img');
+  teethImage.src = 'teeth.png';
+  teethImage.style.cssText = `
+    width: 200px;
+    height: 200px;
+    object-fit: contain;
+  `;
+  
+  imageContainer.append(eyeImage, teethImage);
+  
+  // 创建红色文字
+  const truthText = document.createElement('div');
+  truthText.textContent = 'Now you know what you wanted to know. Perhaps everything should have been better...';
+  truthText.style.cssText = `
+    font-family: 'Indie Flower', cursive;
+    font-size: 1.8rem;
+    color: #ff0000;
+    text-align: center;
+    text-shadow: 0 0 20px rgba(255, 0, 0, 0.8);
+    opacity: 0;
+    max-width: 800px;
+    line-height: 1.5;
+  `;
+  
+  // 添加淡入动画
+  if (!document.querySelector('#truth-keyframes')) {
+    const style = document.createElement('style');
+    style.id = 'truth-keyframes';
+    style.textContent = `
+      @keyframes fadeInTruth {
+        from { opacity: 0; transform: scale(0.8); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      @keyframes fadeInText {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+  
+  truthContainer.append(imageContainer, truthText);
+  document.body.appendChild(truthContainer);
+  
+  // 图片出现时屏幕立即开始变暗
+  setTimeout(() => {
+    darkenOverlay.style.opacity = '1';
+  }, 100);
+  
+  // 图片淡入后，整体渐变更黑暗，然后显示文字
+  setTimeout(() => {
+    // 继续渐变黑暗
+    imageContainer.style.transition = 'opacity 2s ease-in-out';
+    imageContainer.style.opacity = '0.3';
+    
+    // 1秒后显示红字
+    setTimeout(() => {
+      truthText.style.animation = 'fadeInText 2s ease-in forwards';
+      setTimeout(() => {
+        truthText.style.opacity = '1';
+        
+        // 红字显示2秒后，开始血液流动动画
+        setTimeout(() => {
+          createBloodEffect();
+          
+          // 血液流动5秒后，整个画面慢慢变黑
+          setTimeout(() => {
+            const finalBlack = document.createElement('div');
+            finalBlack.style.cssText = `
+              position: fixed;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 100%;
+              background-color: black;
+              z-index: 10005;
+              opacity: 0;
+              transition: opacity 4s ease-in-out;
+              pointer-events: none;
+            `;
+            document.body.appendChild(finalBlack);
+            
+            setTimeout(() => {
+              finalBlack.style.opacity = '1';
+            }, 100);
+          }, 5000);
+        }, 2000);
+      }, 100);
+    }, 1000);
+  }, 2000);
+}
+
+function createBloodEffect() {
+  // 创建血液容器
+  const bloodContainer = document.createElement('div');
+  bloodContainer.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 10004;
+    pointer-events: none;
+    overflow: hidden;
+  `;
+  document.body.appendChild(bloodContainer);
+  
+  // 添加血液流动的CSS动画
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes bloodDrip {
+      0% {
+        height: 0;
+        opacity: 0.9;
+      }
+      30% {
+        opacity: 1;
+      }
+      100% {
+        height: 100vh;
+        opacity: 0.8;
+      }
+    }
+    
+    .blood-drip {
+      position: absolute;
+      top: 0;
+      width: 2px;
+      height: 0;
+      background: linear-gradient(to bottom, 
+        rgba(139, 0, 0, 0.9) 0%,
+        rgba(139, 0, 0, 0.8) 30%,
+        rgba(80, 0, 0, 0.6) 60%,
+        rgba(60, 0, 0, 0.3) 100%
+      );
+      filter: blur(1px);
+      animation: bloodDrip ease-in forwards;
+    }
+  `;
+  document.head.appendChild(style);
+  
+  // 创建多条血液流
+  const bloodCount = 25;
+  for (let i = 0; i < bloodCount; i++) {
+    setTimeout(() => {
+      const bloodDrip = document.createElement('div');
+      bloodDrip.className = 'blood-drip';
+      
+      // 随机位置
+      const leftPos = Math.random() * 100;
+      bloodDrip.style.left = `${leftPos}%`;
+      
+      // 随机宽度
+      const width = 1 + Math.random() * 3;
+      bloodDrip.style.width = `${width}px`;
+      
+      // 随机持续时间
+      const duration = 3 + Math.random() * 2;
+      bloodDrip.style.animationDuration = `${duration}s`;
+      
+      // 随机延迟
+      const delay = Math.random() * 0.5;
+      bloodDrip.style.animationDelay = `${delay}s`;
+      
+      bloodContainer.appendChild(bloodDrip);
+    }, i * 80);
+  }
+}
+

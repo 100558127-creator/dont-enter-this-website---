@@ -1,141 +1,56 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:;">
-  <meta name="referrer" content="no-referrer">
-  <title>Dream Garden Memorial</title>
-  <link rel="stylesheet" href="style.css">
-  <!-- 像素化字体 -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Things You Never Know</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,700;1,400&family=Nanum+Myeongjo:wght@400;700&family=Indie+Flower&display=swap" rel="stylesheet">
 </head>
-
 <body>
-  <nav class="top-nav">
-    <div class="nav-brand">🌱 Dream Garden Memorial</div>
-    <div class="nav-buttons">
-      <button id="nav-my-space" class="nav-btn active">MY SPACE</button>
-      <button id="nav-public-space" class="nav-btn">PUBLIC SPACE</button>
-    </div>
-  </nav>
 
-        <!-- 我的空间页面 -->
-        <div id="my-space" class="page active">
-          <div id="main-scene-container">
-            <!-- 记忆放置区域 -->
-            <div id="itemarea" class="memory-drop-zone"></div>
-            <!-- 墓碑雕刻区域 -->
-            <div id="tombstone-canvas" class="tombstone-canvas">
-              <canvas id="carving-canvas" width="200" height="300"></canvas>
-              <!-- 墓碑文字编辑区域 -->
-              <div id="tombstone-text-editor" class="tombstone-text-editor">
-                <textarea id="tombstone-text" placeholder="write something here..." maxlength="100"></textarea>
-              </div>
+    <div id="game-container">
+
+        <!-- 开场对话框 -->
+        <div id="intro-dialog">
+            <div id="intro-text">
+                <p>You are a second-hand book lover. Today you found a bunch of old books, but... there seems to be something unexpected inside...</p>
+                <p style="margin-top: 1rem; color: #d32f2f;">Click the books to check</p>
             </div>
-          </div>
-
-    <!-- 底部物品栏 -->
-    <div id="itembar">
-      <div class="itembar-content">
-        <button id="upload-btn" class="upload-button">📤 UPLOAD MEMORY</button>
-        <input type="file" id="file-input" accept="image/*" style="display: none;">
-        <div class="toolbar">
-          <div class="tool-item" id="candle-tool" data-tool="candle">
-            <img src="candle.png" alt="Candle" class="tool-icon">
-            <span class="tool-name">Candle</span>
-          </div>
-          <div class="tool-item" id="flower-tool" data-tool="flower">
-            <img src="flower.png" alt="Flower" class="tool-icon">
-            <span class="tool-name">Flower</span>
-          </div>
-          <div class="tool-item" id="envelope-tool" data-tool="envelope">
-            <img src="envelope.png" alt="Envelope" class="tool-icon">
-            <span class="tool-name">Letter</span>
-          </div>
-          <div class="tool-item" id="knife-tool" data-tool="knife">
-            <img src="knife.png" alt="Knife" class="tool-icon">
-            <span class="tool-name">Carve</span>
-          </div>
         </div>
-        <div id="memory-thumbnails" class="thumbnails-container"></div>
-      </div>
+
+        <!-- 书籍图片 -->
+        <div id="books-icon"></div>
+
+        <div id="workspace">
+            </div>
+
+        <!-- 侧边工具栏 -->
+        <div id="toolbar">
+            <div class="toolbar-item" id="tool-pen-hotspot" title="Pen Tool"></div>
+            <div class="toolbar-item" id="tool-tape-hotspot" title="Tape"></div>
+            <div class="toolbar-item" id="tool-tweezers-hotspot" title="Tweezers"></div>
+            <div class="toolbar-item" id="tool-magnifier-hotspot" title="Magnifier"></div>
+            <div class="toolbar-item" id="tool-box-hotspot" title="Box"></div>
+            <div class="toolbar-item" id="tool-pass-slot" title="Pass" style="display: none;"></div>
+        </div>
+        
+        <div id="fragment-pile">
+            <p class="text-lg">Fragments to repair...</p>
+        </div>
+
+        <div id="archive-modal" class="hidden fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+            <div class="paper w-1/2 h-3/4 p-8 overflow-y-auto">
+                <div id="archive-content" class="document-font">
+                    </div>
+            </div>
+        </div>
+
     </div>
 
-    <!-- 垃圾桶 -->
-    <div id="trash-bin" class="trash-bin">🗑️</div>
-  </div>
-
-  <!-- 公共空间页面 -->
-  <div id="public-space" class="page">
-    <div class="public-background"></div>
-    <div class="public-content">
-      <h2 class="public-title">Public Memorial Gardens</h2>
-      <div class="public-actions">
-        <button id="create-mine-btn" class="create-mine-button">🌱 CREATE MY GARDEN</button>
-      </div>
-      <div id="public-memorials" class="memorials-grid"></div>
-    </div>
-  </div>
-
-
-  <!-- 访客模式模态框 -->
-  <div id="visitor-modal" class="modal">
-    <div class="modal-content pixel-modal">
-      <span class="close pixel-close">&times;</span>
-      <div id="visitor-content" class="visitor-scroll"></div>
-      <div class="visitor-actions">
-        <button class="pixel-btn" id="clean-memory">🌿 CLEAN</button>
-        <button class="pixel-btn" id="leave-flower">🌸 OFFER FLOWER</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 记忆预览模态框 -->
-  <div id="memory-preview" class="modal">
-    <div class="modal-content pixel-modal">
-      <span class="close pixel-close">&times;</span>
-      <div class="preview-container">
-        <img id="preview-image" src="" alt="Memory Preview">
-        <div class="preview-actions">
-          <button class="pixel-btn" id="tend-memory">💚 TEND MEMORY</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 信纸写信界面 -->
-  <div id="letter-modal" class="modal">
-    <div class="modal-content letter-modal">
-      <span class="close pixel-close" id="close-letter">&times;</span>
-      <div class="letter-container">
-        <div class="letter-header">
-          <h3 class="letter-title">✉️ Write a Letter</h3>
-        </div>
-        <!-- 时间胶囊设置区域 - 直接显示在信封顶部 -->
-        <div class="letter-time-capsule-settings">
-          <div class="time-capsule-input-group">
-            <label for="unlock-time" class="time-capsule-label">⏰ Unlock Time:</label>
-            <input type="datetime-local" id="unlock-time" class="time-capsule-input">
-            <button type="button" id="no-time-btn" class="no-time-btn">No Time Lock</button>
-          </div>
-          <div class="time-capsule-info">
-            <span class="time-capsule-note">💎 Time Capsule - Write to Future Self</span>
-          </div>
-        </div>
-        <div class="letter-paper">
-          <textarea id="letter-content" placeholder="Write your thoughts here..." class="letter-textarea"></textarea>
-        </div>
-        <div class="letter-actions">
-          <button class="pixel-btn" id="save-letter">💾 Save Letter</button>
-          <button class="pixel-btn" id="cancel-letter">❌ Cancel</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <script src="script.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>
