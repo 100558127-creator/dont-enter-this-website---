@@ -264,7 +264,161 @@ window.onload = () => {
   tweezersHotspot.addEventListener('click', () => selectTool('tweezers'));
   magnifierHotspot.addEventListener('click', () => selectTool('magnifier'));
   boxHotspot.addEventListener('click', () => selectTool('box'));
+  
+  // 显示开场黑屏警告
+  showOpeningWarning();
 };
+
+// 显示开场黑屏警告
+function showOpeningWarning() {
+  // 创建黑色遮罩层（直接显示，不淡入）
+  const warningOverlay = document.createElement('div');
+  warningOverlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: black;
+    z-index: 100000;
+    opacity: 1;
+    transition: opacity 2s ease-in-out;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 3rem;
+  `;
+  
+  // 创建警告文字容器（两行）
+  const warningText = document.createElement('div');
+  warningText.style.cssText = `
+    font-family: 'Indie Flower', cursive;
+    font-size: 2rem;
+    color: #ff0000;
+    text-align: center;
+    opacity: 1;
+    transition: opacity 2s ease-in-out;
+    letter-spacing: 0.2em;
+    line-height: 1.8;
+  `;
+  
+  // 创建第一行文字
+  const line1 = document.createElement('div');
+  line1.textContent = 'Do not be curious.';
+  
+  // 创建第二行文字
+  const line2 = document.createElement('div');
+  line2.textContent = 'Do not disturb them.';
+  
+  warningText.appendChild(line1);
+  warningText.appendChild(line2);
+  warningOverlay.appendChild(warningText);
+  document.body.appendChild(warningOverlay);
+  
+  let optionsShown = false;
+  
+  // 点击任意位置后先让红字消失，再显示选项
+  const handleClick = () => {
+    if (optionsShown) return;
+    optionsShown = true;
+    
+    // 先让红色文字淡出
+    warningText.style.opacity = '0';
+    
+    // 等待文字完全消失后再显示选项
+    setTimeout(() => {
+      // 创建选项容器
+      const optionsContainer = document.createElement('div');
+      optionsContainer.style.cssText = `
+        display: flex;
+        gap: 3rem;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity 1s ease-in;
+      `;
+      
+      // 创建 Enter 按钮
+      const enterButton = document.createElement('div');
+      enterButton.textContent = 'Enter';
+      enterButton.style.cssText = `
+        font-family: 'Indie Flower', cursive;
+        font-size: 1.8rem;
+        color: #ffffff;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: underline;
+        opacity: 0.8;
+      `;
+      
+      enterButton.onmouseover = () => {
+        enterButton.style.opacity = '1';
+        enterButton.style.transform = 'scale(1.1)';
+      };
+      
+      enterButton.onmouseout = () => {
+        enterButton.style.opacity = '0.8';
+        enterButton.style.transform = 'scale(1)';
+      };
+      
+      // 创建 Leave 按钮
+      const leaveButton = document.createElement('div');
+      leaveButton.textContent = 'Leave';
+      leaveButton.style.cssText = `
+        font-family: 'Indie Flower', cursive;
+        font-size: 1.8rem;
+        color: #ff0000;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: underline;
+        opacity: 0.8;
+      `;
+      
+      leaveButton.onmouseover = () => {
+        leaveButton.style.opacity = '1';
+        leaveButton.style.transform = 'scale(1.1)';
+      };
+      
+      leaveButton.onmouseout = () => {
+        leaveButton.style.opacity = '0.8';
+        leaveButton.style.transform = 'scale(1)';
+      };
+      
+      // Enter 按钮点击事件 - 进入界面
+      enterButton.addEventListener('click', () => {
+        warningOverlay.style.opacity = '0';
+        optionsContainer.style.opacity = '0';
+        
+        setTimeout(() => {
+          warningOverlay.remove();
+        }, 2000);
+        
+        warningOverlay.removeEventListener('click', handleClick);
+      });
+      
+      // Leave 按钮点击事件 - 所有字慢慢消失，保持黑屏
+      leaveButton.addEventListener('click', () => {
+        optionsContainer.style.opacity = '0';
+        
+        // 淡出完成后移除选项容器
+        setTimeout(() => {
+          optionsContainer.remove();
+        }, 1000);
+      });
+      
+      optionsContainer.appendChild(enterButton);
+      optionsContainer.appendChild(leaveButton);
+      warningOverlay.appendChild(optionsContainer);
+      
+      // 淡入选项
+      setTimeout(() => {
+        optionsContainer.style.opacity = '1';
+      }, 100);
+    }, 2000); // 等待文字淡出完成（2秒）
+  };
+  
+  warningOverlay.addEventListener('click', handleClick);
+}
 
 function handleBooksClick() {
   // 如果玩家拒绝修复信件，显示"没有更多东西"
@@ -314,6 +468,9 @@ function placePassStamp(e) {
   const passStamp = document.createElement('img');
   passStamp.src = 'pass.png';
   passStamp.className = 'placed-pass';
+  
+  // 初始 z-index 设置为 501（在 explode 上方）
+  const initialZIndex = '501';
   passStamp.style.cssText = `
     position: absolute;
     width: 150px;
@@ -321,7 +478,7 @@ function placePassStamp(e) {
     left: ${x - 75}px;
     top: ${y - 75}px;
     pointer-events: none;
-    z-index: 10000;
+    z-index: ${initialZIndex};
   `;
   
   gameContainer.appendChild(passStamp);
@@ -329,6 +486,40 @@ function placePassStamp(e) {
   gameState.isPassActive = false;
   passSlot.style.backgroundColor = 'transparent';
   passSlot.style.border = 'none';
+  
+  // 调用更新 pass 层级函数
+  updatePassLayersAfterSwap();
+}
+
+// 更新所有已放置的 pass 的层级，使其在 explode 上方，但在 news 下方
+function updatePassLayersAfterSwap() {
+  const placedPasses = document.querySelectorAll('.placed-pass');
+  if (!explodeImage || !newsImageClear || !newsImageBlurred || placedPasses.length === 0) {
+    return;
+  }
+  
+  const explodeZ = parseInt(explodeImage.style.zIndex);
+  const newsZ = parseInt(newsImageClear.style.zIndex);
+  
+  // 如果 news 在上方 (newsZ > explodeZ)，pass 应该在 news 下方
+  // 如果 explode 在上方 (explodeZ > newsZ)，pass 应该在 explode 上方但在 news 下方
+  let passZIndex;
+  
+  if (newsZ > explodeZ) {
+    // news 在 explode 上方，pass 应该在 explode 上方但在 news 下方
+    // explode 在底层 (500)，news 在上层 (502)
+    // pass 应该在 501
+    passZIndex = '501';
+  } else {
+    // explode 在 news 上方，pass 应该在 explode 上方
+    // explode 在上层 (502)，news 在底层 (500)
+    // pass 应该在 503
+    passZIndex = '503';
+  }
+  
+  placedPasses.forEach(pass => {
+    pass.style.zIndex = passZIndex;
+  });
 }
 
 // ===== 第一关：地图 =====
@@ -458,7 +649,7 @@ function startPuzzlePhase() {
   // 先切换背景，等背景切换完成后再显示关卡内容
   switchBackgroundToLevel();
   setTimeout(() => {
-    const puzzleDialog = createDialog('You found some fragments with something written on them...');
+    const puzzleDialog = createDialog('You found some pieces with something written on them...');
     
     setTimeout(() => {
       puzzleDialog.style.opacity = '0';
@@ -1186,6 +1377,9 @@ function swapNewsLayers(e) {
     explodeImage._clickHandler = createNewsClickHandler();
     explodeImage.addEventListener('click', explodeImage._clickHandler);
   }
+  
+  // 更新 pass 的层级
+  updatePassLayersAfterSwap();
 }
 
 function handleNewsOverlappingMagnifier(e) {
@@ -2582,7 +2776,63 @@ function closeEndPhase() {
 function startFinalPhase() {
   isFinalPhase = true;
   
-  // 创建黑色遮罩层
+  // 隐藏所有工具栏图标和其他元素
+  booksIcon.style.opacity = '0';
+  penHotspot.style.opacity = '0';
+  tapeHotspot.style.opacity = '0';
+  tweezersHotspot.style.opacity = '0';
+  magnifierHotspot.style.opacity = '0';
+  passSlot.style.opacity = '0';
+  
+  setTimeout(() => {
+    booksIcon.style.display = 'none';
+    penHotspot.style.display = 'none';
+    tapeHotspot.style.display = 'none';
+    tweezersHotspot.style.display = 'none';
+    magnifierHotspot.style.display = 'none';
+    passSlot.style.display = 'none';
+  }, 500);
+  
+  // 获取 toolbar 引用
+  const toolbar = document.getElementById('toolbar');
+  
+  // 创建一个独立的 box 元素（从 toolbar 移出）
+  const standaloneBox = document.createElement('div');
+  standaloneBox.className = 'toolbar-item standalone-box';
+  standaloneBox.id = 'standalone-box-hotspot';
+  standaloneBox.style.cssText = `
+    position: fixed;
+    right: 2%;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 80px;
+    height: 80px;
+    background-image: url('box.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    cursor: pointer;
+    z-index: 10001;
+    opacity: 1;
+  `;
+  document.body.appendChild(standaloneBox);
+  
+  // 为独立 box 添加点击事件
+  standaloneBox.addEventListener('click', () => selectTool('box'));
+  
+  // 隐藏原始的 box（它在 toolbar 中）
+  boxHotspot.style.opacity = '0';
+  setTimeout(() => {
+    boxHotspot.style.display = 'none';
+  }, 500);
+  
+  // 让 toolbar 的背景慢慢变黑消失
+  toolbar.style.transition = 'opacity 3s ease-in-out';
+  setTimeout(() => {
+    toolbar.style.opacity = '0';
+  }, 100);
+  
+  // 创建整个屏幕的黑色遮罩层（除了 box）
   blackOverlay = document.createElement('div');
   blackOverlay.style.cssText = `
     position: fixed;
@@ -2591,61 +2841,16 @@ function startFinalPhase() {
     width: 100%;
     height: 100%;
     background-color: black;
-    z-index: 9999;
+    z-index: 10000;
     opacity: 0;
     transition: opacity 3s ease-in-out;
     pointer-events: none;
   `;
   document.body.appendChild(blackOverlay);
   
-  // 慢慢变黑
+  // 整个屏幕慢慢变黑
   setTimeout(() => {
     blackOverlay.style.opacity = '1';
-  }, 100);
-  
-  // 隐藏所有工具栏图标，除了box
-  setTimeout(() => {
-    booksIcon.style.opacity = '0';
-    penHotspot.style.opacity = '0';
-    tapeHotspot.style.opacity = '0';
-    tweezersHotspot.style.opacity = '0';
-    magnifierHotspot.style.opacity = '0';
-    passSlot.style.opacity = '0';
-    
-    setTimeout(() => {
-      booksIcon.style.display = 'none';
-      penHotspot.style.display = 'none';
-      tapeHotspot.style.display = 'none';
-      tweezersHotspot.style.display = 'none';
-      magnifierHotspot.style.display = 'none';
-      passSlot.style.display = 'none';
-    }, 500);
-  }, 3000);
-  
-  // 创建工具栏遮罩层，覆盖整个toolbar但box保持可见
-  const toolbarOverlay = document.createElement('div');
-  const toolbar = document.getElementById('toolbar');
-  toolbarOverlay.style.cssText = `
-    position: fixed;
-    top: 0;
-    right: 0;
-    width: 80px;
-    height: 100%;
-    background-color: black;
-    z-index: 9998;
-    opacity: 0;
-    transition: opacity 3s ease-in-out;
-    pointer-events: none;
-  `;
-  document.body.appendChild(toolbarOverlay);
-  
-  // 提高box的z-index，确保它在遮罩层上方
-  boxHotspot.style.position = 'relative';
-  boxHotspot.style.zIndex = '10000';
-  
-  // 工具栏遮罩层也慢慢变黑
-  setTimeout(() => {
-    toolbarOverlay.style.opacity = '1';
   }, 100);
 }
 
@@ -2657,7 +2862,7 @@ function showPasswordWheel() {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    z-index: 10001;
+    z-index: 10002;
     background-image: url('dialogue.png');
     background-size: 100% 100%;
     background-repeat: no-repeat;
@@ -2791,7 +2996,7 @@ function showFinalTruth() {
     width: 100%;
     height: 100%;
     background-color: rgba(0, 0, 0, 0.7);
-    z-index: 10001;
+    z-index: 10002;
     opacity: 0;
     transition: opacity 2s ease-in-out;
     pointer-events: none;
@@ -2805,7 +3010,7 @@ function showFinalTruth() {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    z-index: 10002;
+    z-index: 10003;
     display: flex;
     flex-direction: column;
     align-items: center;
